@@ -34,7 +34,7 @@ def sample_ocos() -> list[OCOOrder]:
                     "side": "SELL",
                     "quantity": qty_s,
                     "abovePrice": tp_s,
-                    "belowPrice": lower_s,
+                    "belowPrice": limit_s,
                     "belowStopPrice": stop_s,
                     "fixture": True,
                 },
