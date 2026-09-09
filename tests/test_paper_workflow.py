@@ -83,6 +83,22 @@ def test_original_is_not_canceled_when_replacement_draft_is_invalid() -> None:
     assert exchange.get_oco(1001).status.value == "ACTIVE"
 
 
+def test_invalid_sell_oco_price_relationship_does_not_cancel_original() -> None:
+    exchange = provider({"TUTUSDT": Decimal("0.065000")})
+    service = OCOEditorService(exchange)  # type: ignore[arg-type]
+    service.select(1001)
+    service.set_draft_field("abovePrice", "0.064000")
+    service.set_draft_field("belowStopPrice", "0.060000")
+
+    result = service.activate()
+
+    assert result.state.value == "ABORTED"
+    assert "above last price" in result.message.lower()
+    assert exchange.cancelled == []
+    assert exchange.placed_payloads == []
+    assert exchange.get_oco(1001).status.value == "ACTIVE"
+
+
 def test_replacement_failure_marks_attention_and_does_not_touch_other_orders() -> None:
     exchange = provider({"TUTUSDT": Decimal("0.045183")})
     exchange.fail_next_place = True
