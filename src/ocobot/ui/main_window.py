@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from decimal import Decimal, InvalidOperation
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
@@ -20,11 +20,12 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OCObot — Binance OCO Safe Editor V1")
-        self.resize(1180, 720)
-        self.provider = PaperOCOProvider(sample_ocos(), {
-            "TUTUSDT": Decimal("0.045183"),
-            "FIDAUSDT": Decimal("0.078210"),
-        })
+        self.resize(1280, 760)
+        self.provider = PaperOCOProvider(
+            sample_ocos(),
+            {"TUTUSDT": Decimal("0.045183"), "FIDAUSDT": Decimal("0.078210")},
+            {"TUTUSDT": Decimal("0.000001"), "FIDAUSDT": Decimal("0.000001")},
+        )
         self.service = OCOEditorService(self.provider)  # type: ignore[arg-type]
         self.unsubscribe = None
         self._build_ui()
@@ -46,7 +47,7 @@ class MainWindow(QMainWindow):
         right = QVBoxLayout()
 
         self.orders = QTableWidget(0, 6)
-        self.orders.setHorizontalHeaderLabels(["#", "Symbol", "Qty", "TP", "SL", "Status"])
+        self.orders.setHorizontalHeaderLabels(["Order List ID", "Symbol", "Qty", "TP", "SL", "Status"])
         self.orders.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.orders.itemSelectionChanged.connect(self._select_current)
         left_box = QGroupBox("Open OCO Orders")
@@ -54,15 +55,17 @@ class MainWindow(QMainWindow):
         lb.addWidget(self.orders)
         left.addWidget(left_box)
 
-        monitor_box = QGroupBox("Live OCO Monitor")
+        monitor_box = QGroupBox("Live OCO Monitor — separate from editor")
         mf = QFormLayout(monitor_box)
         self.monitor_symbol = QLabel("—")
         self.live_price = QLabel("—")
         self.max_stop = QLabel("—")
+        self.tick_size = QLabel("—")
         self.original_status = QLabel("—")
-        mf.addRow("Symbol", self.monitor_symbol)
-        mf.addRow("Last Price", self.live_price)
+        mf.addRow("Selected symbol", self.monitor_symbol)
+        mf.addRow("Last price", self.live_price)
         mf.addRow("Highest valid sell stop", self.max_stop)
+        mf.addRow("Tick size", self.tick_size)
         mf.addRow("Original OCO", self.original_status)
         right.addWidget(monitor_box)
 
@@ -75,13 +78,22 @@ class MainWindow(QMainWindow):
         self.state_label = QLabel("No OCO selected")
         ef.addRow("TP price", self.tp_edit)
         ef.addRow("Stop price", self.sl_edit)
-        ef.addRow("Quantity", self.qty_edit)
+        ef.addRow("Quantity (original)", self.qty_edit)
         ef.addRow("State", self.state_label)
         self.activate_btn = QPushButton("ACTIVATE")
         self.activate_btn.setMinimumHeight(46)
         self.activate_btn.clicked.connect(self._activate)
         ef.addRow(self.activate_btn)
         right.addWidget(editor_box)
+
+        raw_box = QGroupBox("Selected OCO — all preserved exchange fields")
+        raw_layout = QVBoxLayout(raw_box)
+        self.raw_table = QTableWidget(0, 2)
+        self.raw_table.setHorizontalHeaderLabels(["Field", "Value"])
+        self.raw_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.raw_table.setColumnWidth(0, 240)
+        raw_layout.addWidget(self.raw_table)
+        right.addWidget(raw_box, 1)
 
         content.addLayout(left, 1)
         content.addLayout(right, 1)
@@ -105,28 +117,41 @@ class MainWindow(QMainWindow):
         if not rows:
             return
         row = rows[0].row()
-        order_id = int(self.orders.item(row, 0).text())
+        order_list_id = int(self.orders.item(row, 0).text())
         try:
-            draft = self.service.select(order_id)
+            draft = self.service.select(order_list_id)
         except ValueError as exc:
             QMessageBox.warning(self, "Selection", str(exc))
             return
+
         self.tp_edit.setText(str(draft.values.get("abovePrice") or draft.values.get("leg1.price") or ""))
         self.sl_edit.setText(str(draft.values.get("belowStopPrice") or draft.values.get("leg2.stopPrice") or ""))
         self.qty_edit.setText(str(draft.values.get("quantity") or draft.values.get("leg1.quantity") or ""))
         self.monitor_symbol.setText(draft.selection.symbol)
-        self.state_label.setText("DRAFTING — original remains active")
+        self.state_label.setText(f"DRAFTING — OCO {order_list_id}; original remains active")
         self.original_status.setText("ACTIVE")
+        self._populate_raw(draft.values)
         if self.unsubscribe:
             self.unsubscribe()
         self.unsubscribe = self.provider.subscribe_price(draft.selection.symbol, self._on_price)
         self._refresh_live()
 
+    def _populate_raw(self, values: dict[str, object]) -> None:
+        self.raw_table.setRowCount(len(values))
+        for row, (key, value) in enumerate(sorted(values.items())):
+            self.raw_table.setItem(row, 0, QTableWidgetItem(str(key)))
+            self.raw_table.setItem(row, 1, QTableWidgetItem(str(value)))
+
     def _on_price(self, price: Decimal) -> None:
         self.live_price.setText(f"{price:f}  ● LIVE")
-        if self.monitor_symbol.text() and self.monitor_symbol.text() in {"TUTUSDT", "FIDAUSDT"}:
-            tick = Decimal("0.000001")
-            self.max_stop.setText(f"{highest_sell_stop_candidate(price, tick):f}")
+        symbol = self.monitor_symbol.text()
+        if symbol and symbol != "—":
+            try:
+                tick = self.provider.get_tick_size(symbol)
+                self.tick_size.setText(f"{tick:f}")
+                self.max_stop.setText(f"{highest_sell_stop_candidate(price, tick):f}")
+            except Exception:
+                self.max_stop.setText("—")
 
     def _refresh_live(self) -> None:
         symbol = self.monitor_symbol.text()
