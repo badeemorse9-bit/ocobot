@@ -120,3 +120,55 @@ def test_activation_timeline_is_cancel_then_place() -> None:
     service.activate()
 
     assert provider.activation_timeline == ["cancel:1001", "place:new"]
+
+
+def test_max_stop_is_optional_until_armed() -> None:
+    provider = PaperOCOProvider(sample_ocos(), {"TUTUSDT": Decimal("0.065183")})
+    service = OCOEditorService(provider)  # type: ignore[arg-type]
+    service.select(1001)
+    service.set_draft_field("abovePrice", "0.07400")
+    service.set_draft_field("belowStopPrice", "0.06000")
+
+    assert service.max_stop_dynamic is False
+    provider.set_last_price("TUTUSDT", Decimal("0.069000"))
+    assert service.draft.values["belowStopPrice"] == "0.06000"
+
+
+def test_max_stop_uses_latest_price_again_immediately_before_create() -> None:
+    class PriceMovesDuringCancel(PaperOCOProvider):
+        def cancel_oco(self, order_list_id: int) -> dict[str, object]:
+            result = super().cancel_oco(order_list_id)
+            self.set_last_price("TUTUSDT", Decimal("0.070123"))
+            return result
+
+    provider = PriceMovesDuringCancel(
+        sample_ocos(), {"TUTUSDT": Decimal("0.065183")},
+    )
+    service = OCOEditorService(provider)  # type: ignore[arg-type]
+    service.select(1001)
+    service.set_draft_field("abovePrice", "0.07400")
+    service.set_draft_field("belowStopPrice", "0.06000")
+
+    armed = service.arm_max_stop()
+    assert armed == Decimal("0.065182")
+    assert service.max_stop_dynamic is True
+
+    result = service.activate()
+
+    assert result.state.value == "SUCCESS"
+    assert provider.cancelled == [1001]
+    assert provider.placed_payloads[0]["belowStopPrice"] == "0.070122"
+
+
+def test_manual_stop_remains_fixed_without_dynamic_mode() -> None:
+    provider = PaperOCOProvider(sample_ocos(), {"TUTUSDT": Decimal("0.065183")})
+    service = OCOEditorService(provider)  # type: ignore[arg-type]
+    service.select(1001)
+    service.set_draft_field("abovePrice", "0.07400")
+    service.set_draft_field("belowStopPrice", "0.06000")
+
+    provider.set_last_price("TUTUSDT", Decimal("0.070123"))
+    result = service.activate()
+
+    assert result.state.value == "SUCCESS"
+    assert provider.placed_payloads[0]["belowStopPrice"] == "0.06000"
