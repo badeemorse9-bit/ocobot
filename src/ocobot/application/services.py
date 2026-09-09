@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from ocobot.domain.models import ActivationState, OCOOrder, OCODraft, OCOSelection
+from ocobot.domain.validation import highest_sell_stop_candidate
 from ocobot.providers.base import OCOProvider
 
 
@@ -27,6 +28,7 @@ class OCOEditorService:
         self.original: OCOOrder | None = None
         self.draft: OCODraft | None = None
         self.state = ActivationState.IDLE
+        self.max_stop_dynamic = False
 
     def refresh_open_orders(self) -> list[OCOOrder]:
         return self.provider.list_open_ocos()
@@ -41,6 +43,7 @@ class OCOEditorService:
         self.selection = OCOSelection(order.order_list_id, order.symbol, int(time.time() * 1000), order.transaction_time)
         values = self._draft_values(order)
         self.draft = OCODraft(self.selection, values, order.raw, int(time.time() * 1000))
+        self.max_stop_dynamic = False
         self.state = ActivationState.DRAFTING
         return self.draft
 
@@ -64,6 +67,30 @@ class OCOEditorService:
             raise RuntimeError("Select an OCO first")
         self.draft.set(key, value)
 
+    def arm_max_stop(self) -> Decimal:
+        """Arm dynamic MAX STOP and immediately show its current candidate."""
+        if self.selection is None or self.draft is None:
+            raise RuntimeError("Select an OCO first")
+        price = self.provider.get_last_price(self.selection.symbol)
+        tick = self.provider.get_tick_size(self.selection.symbol)
+        candidate = highest_sell_stop_candidate(price, tick)
+        if candidate <= 0:
+            raise ValueError("Current price is too small for a positive tick-aligned stop.")
+        self.draft.set("belowStopPrice", str(candidate))
+        self.max_stop_dynamic = True
+        return candidate
+
+    def _refresh_dynamic_max_stop(self) -> Decimal | None:
+        if not self.max_stop_dynamic or self.selection is None or self.draft is None:
+            return None
+        price = self.provider.get_last_price(self.selection.symbol)
+        tick = self.provider.get_tick_size(self.selection.symbol)
+        candidate = highest_sell_stop_candidate(price, tick)
+        if candidate <= 0:
+            raise ValueError("Current price is too small for a positive tick-aligned stop.")
+        self.draft.set("belowStopPrice", str(candidate))
+        return candidate
+
     def _validate_draft_before_cancel(self) -> tuple[bool, str]:
         if self.selection is None or self.draft is None:
             return False, "No OCO selected"
@@ -82,6 +109,11 @@ class OCOEditorService:
     def preflight(self) -> tuple[bool, str, OCOOrder | None]:
         if self.selection is None or self.draft is None:
             return False, "No OCO selected", None
+        if self.max_stop_dynamic:
+            try:
+                self._refresh_dynamic_max_stop()
+            except Exception as exc:
+                return False, f"Unable to refresh MAX STOP before cancellation: {exc}", None
         valid_draft, draft_message = self._validate_draft_before_cancel()
         if not valid_draft:
             return False, draft_message, None
@@ -113,6 +145,10 @@ class OCOEditorService:
             self.state = ActivationState.CANCELLING
             cancel_result = self.provider.cancel_oco(self.selection.order_list_id)
             self.state = ActivationState.CREATING
+            if self.max_stop_dynamic:
+                refreshed_stop = self._refresh_dynamic_max_stop()
+                if refreshed_stop is not None:
+                    payload = self._build_create_payload(self.draft)
             create_result = self.provider.place_oco(payload)
             self.state = ActivationState.CONFIRMING
             if not create_result.get("orderListId"):
