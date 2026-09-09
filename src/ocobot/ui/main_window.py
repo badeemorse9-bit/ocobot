@@ -3,11 +3,12 @@ from __future__ import annotations
 import sys
 from decimal import Decimal, InvalidOperation
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout,
+    QApplication, QCheckBox, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ocobot.application.services import OCOEditorService
@@ -15,23 +16,44 @@ from ocobot.domain.validation import highest_sell_stop_candidate
 from ocobot.providers.paper import PaperOCOProvider
 from ocobot.providers.sample_data import sample_ocos
 
+APP_STYLE = """
+QMainWindow, QWidget { background: #f4f6f8; color: #18212b; }
+QGroupBox { background: #ffffff; border: 1px solid #d7dde4; border-radius: 10px; margin-top: 12px; padding: 10px; font-weight: 700; }
+QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #24313d; }
+QTableWidget { background: #ffffff; border: 1px solid #d7dde4; border-radius: 7px; gridline-color: #e7ebef; selection-background-color: #dcecff; selection-color: #102030; }
+QHeaderView::section { background: #eef2f5; color: #33404d; padding: 7px; border: 0; border-bottom: 1px solid #d7dde4; font-weight: 700; }
+QLineEdit { background: #ffffff; border: 1px solid #c8d0d8; border-radius: 6px; padding: 7px 8px; }
+QLineEdit:focus { border: 1px solid #4a86c5; }
+QPushButton { background: #edf1f4; border: 1px solid #c8d0d8; border-radius: 6px; padding: 8px 12px; font-weight: 700; }
+QPushButton:hover { background: #e4e9ee; }
+QPushButton:disabled { color: #9aa4ae; background: #edf0f2; }
+QPushButton#primaryButton { background: #1f6feb; color: white; border: 0; }
+QPushButton#primaryButton:hover { background: #185abd; }
+QPushButton#dangerButton { background: #fff2f0; color: #a33125; border: 1px solid #e4b7b1; }
+QPushButton#modeActive { background: #1f6feb; color: white; border: 0; }
+QPushButton#modeDisabled { background: #e6eaee; color: #7b8792; }
+QCheckBox { spacing: 7px; }
+"""
 
 class MainWindow(QMainWindow):
-    """Interactive Paper Demo for the OCO Safe Editor workflow."""
+    """Interactive Paper Demo for the V1 OCO Safe Editor workflow."""
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OCObot — Binance OCO Safe Editor V1")
-        self.resize(1440, 900)
+        self.resize(1480, 940)
+        self.setMinimumSize(1180, 760)
+        self.setStyleSheet(APP_STYLE)
         self.provider = self._new_provider()
         self.service = OCOEditorService(self.provider)  # type: ignore[arg-type]
         self.unsubscribe = None
+        self._refreshing_orders = False
         self._build_ui()
-        self._refresh_orders()
+        self._refresh_orders(preserve_selection=False)
         self._set_demo_enabled(True)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_live)
-        self._timer.start(250)
+        self._timer.start(500)
 
     @staticmethod
     def _new_provider() -> PaperOCOProvider:
@@ -41,69 +63,123 @@ class MainWindow(QMainWindow):
             {"TUTUSDT": Decimal("0.000001"), "FIDAUSDT": Decimal("0.000001")},
         )
 
+    @staticmethod
+    def _section_title(text: str, hint: str = "") -> QWidget:
+        widget = QWidget()
+        row = QHBoxLayout(widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        title = QLabel(text)
+        title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        row.addWidget(title)
+        if hint:
+            note = QLabel(hint)
+            note.setStyleSheet("color:#6b7681; font-weight:400;")
+            row.addWidget(note)
+        row.addStretch()
+        return widget
+
     def _build_ui(self) -> None:
-        root = QVBoxLayout()
-        central = QGroupBox()
-        central.setLayout(root)
+        central = QWidget()
+        root = QVBoxLayout(central)
+        root.setContentsMargins(14, 12, 14, 14)
+        root.setSpacing(10)
+        self.setCentralWidget(central)
 
         header = QHBoxLayout()
-        title = QLabel("OCObot  •  PAPER DEMO")
-        title.setStyleSheet("font-size: 22px; font-weight: 700;")
-        self.connection = QLabel("● PAPER — no Binance calls")
-        header.addWidget(title)
+        brand = QLabel("OCObot")
+        brand.setFont(QFont("Segoe UI", 22, QFont.Weight.Bold))
+        subtitle = QLabel("Binance OCO Safe Editor • V1")
+        subtitle.setStyleSheet("color:#66727e; font-size:13px;")
+        header.addWidget(brand)
+        header.addWidget(subtitle)
         header.addStretch()
+        self.paper_mode_btn = QPushButton("PAPER")
+        self.paper_mode_btn.setObjectName("modeActive")
+        self.paper_mode_btn.setMinimumWidth(105)
+        self.paper_mode_btn.setToolTip("Paper Simulator / Demo mode")
+        self.testnet_mode_btn = QPushButton("TESTNET")
+        self.testnet_mode_btn.setObjectName("modeDisabled")
+        self.testnet_mode_btn.setEnabled(False)
+        self.testnet_mode_btn.setMinimumWidth(105)
+        self.testnet_mode_btn.setToolTip("Testnet mode will be enabled after local synchronization")
+        header.addWidget(self.paper_mode_btn)
+        header.addWidget(self.testnet_mode_btn)
+        self.connection = QLabel("● PAPER DEMO — no Binance calls")
+        self.connection.setStyleSheet("color:#286b43; font-weight:700; margin-left:10px;")
         header.addWidget(self.connection)
         root.addLayout(header)
 
+        safety = QFrame()
+        safety.setStyleSheet("QFrame { background:#fff8e8; border:1px solid #efd79a; border-radius:8px; }")
+        safety_row = QHBoxLayout(safety)
+        safety_row.setContentsMargins(10, 7, 10, 7)
+        lock = QLabel("LOCKED TARGET")
+        lock.setStyleSheet("font-weight:800; color:#7c5a08;")
+        safety_row.addWidget(lock)
+        self.target_label = QLabel("No OCO selected")
+        self.target_label.setStyleSheet("color:#5e4a16;")
+        safety_row.addWidget(self.target_label, 1)
+        safety_row.addWidget(QLabel("Editing is local until ACTIVATE"))
+        root.addWidget(safety)
+
         content = QHBoxLayout()
+        content.setSpacing(10)
         left = QVBoxLayout()
         right = QVBoxLayout()
+        left.setSpacing(8)
+        right.setSpacing(8)
 
+        orders_box = QGroupBox("Open OCO Orders")
+        orders_layout = QVBoxLayout(orders_box)
+        orders_layout.addWidget(self._section_title("Select exactly one active OCO", "Only the selected order may be replaced."))
         self.orders = QTableWidget(0, 6)
-        self.orders.setHorizontalHeaderLabels(["Order List ID", "Symbol", "Qty", "TP", "SL", "Status"])
+        self.orders.setHorizontalHeaderLabels(["Order List ID", "Symbol", "Qty", "Take Profit", "Stop Loss", "Status"])
         self.orders.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.orders.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.orders.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.orders.setAlternatingRowColors(True)
         self.orders.itemSelectionChanged.connect(self._select_current)
-        left_box = QGroupBox("Open OCO Orders — select exactly one")
-        lb = QVBoxLayout(left_box)
-        lb.addWidget(self.orders)
-        left.addWidget(left_box, 1)
+        self.orders.verticalHeader().setVisible(False)
+        self.orders.setMinimumHeight(310)
+        orders_layout.addWidget(self.orders, 1)
+        left.addWidget(orders_box, 1)
 
-        demo_box = QGroupBox("Paper Simulator Controls")
+        demo_box = QGroupBox("Paper Simulator")
         demo_layout = QVBoxLayout(demo_box)
-        self.price_input = QLineEdit("0.06500")
-        self.price_input.setPlaceholderText("Simulated last price")
+        demo_layout.addWidget(self._section_title("Controlled Demo Actions", "These controls never call Binance."))
         price_row = QHBoxLayout()
-        price_row.addWidget(QLabel("Move price to"))
-        price_row.addWidget(self.price_input, 1)
+        price_row.addWidget(QLabel("Simulated last price"))
+        self.price_input = QLineEdit("0.06500")
+        self.price_input.setMinimumWidth(150)
+        price_row.addWidget(self.price_input)
         self.move_price_btn = QPushButton("MOVE PRICE")
         self.move_price_btn.clicked.connect(self._move_price)
         price_row.addWidget(self.move_price_btn)
         demo_layout.addLayout(price_row)
-
         scenario_row = QHBoxLayout()
         self.tp_hit_btn = QPushButton("SIMULATE TP HIT")
         self.tp_hit_btn.clicked.connect(lambda: self._force_execute("TP"))
         self.sl_hit_btn = QPushButton("SIMULATE SL HIT")
         self.sl_hit_btn.clicked.connect(lambda: self._force_execute("SL"))
         self.reset_btn = QPushButton("RESET DEMO")
+        self.reset_btn.setObjectName("dangerButton")
         self.reset_btn.clicked.connect(self._reset_demo)
         scenario_row.addWidget(self.tp_hit_btn)
         scenario_row.addWidget(self.sl_hit_btn)
         scenario_row.addWidget(self.reset_btn)
         demo_layout.addLayout(scenario_row)
-
-        fail_row = QHBoxLayout()
+        fault_row = QHBoxLayout()
         self.fail_place = QCheckBox("Fail next replacement creation")
         self.fail_place.stateChanged.connect(self._toggle_fail_place)
         self.fail_cancel = QCheckBox("Fail next cancellation")
         self.fail_cancel.stateChanged.connect(self._toggle_fail_cancel)
-        fail_row.addWidget(self.fail_place)
-        fail_row.addWidget(self.fail_cancel)
-        fail_row.addStretch()
-        demo_layout.addLayout(fail_row)
+        fault_row.addWidget(self.fail_place)
+        fault_row.addWidget(self.fail_cancel)
+        fault_row.addStretch()
+        demo_layout.addLayout(fault_row)
         left.addWidget(demo_box)
 
-        monitor_box = QGroupBox("Live OCO Monitor — separate from editor")
+        monitor_box = QGroupBox("Live OCO Monitor")
         mf = QFormLayout(monitor_box)
         self.monitor_symbol = QLabel("—")
         self.live_price = QLabel("—")
@@ -111,44 +187,47 @@ class MainWindow(QMainWindow):
         self.tick_size = QLabel("—")
         self.original_status = QLabel("—")
         mf.addRow("Selected symbol", self.monitor_symbol)
-        mf.addRow("Last price", self.live_price)
+        mf.addRow("Current / last price", self.live_price)
         mf.addRow("Highest valid sell stop", self.max_stop)
-        mf.addRow("Tick size", self.tick_size)
-        mf.addRow("Original OCO", self.original_status)
+        mf.addRow("Price tick size", self.tick_size)
+        mf.addRow("Original OCO status", self.original_status)
         right.addWidget(monitor_box)
 
-        editor_box = QGroupBox("OCO Editor — local draft")
+        editor_box = QGroupBox("OCO Editor — Local Draft")
         ef = QFormLayout(editor_box)
         self.tp_edit = QLineEdit()
         self.sl_edit = QLineEdit()
-        self.sl_edit.editingFinished.connect(self._manual_stop_edit)
         self.qty_edit = QLineEdit()
         self.qty_edit.setReadOnly(True)
-        self.state_label = QLabel("No OCO selected")
-        ef.addRow("TP price", self.tp_edit)
+        self.qty_edit.setToolTip("Quantity is copied from the selected original OCO and is not editable in V1.")
+        self.sl_edit.textEdited.connect(self._manual_stop_edit)
+        ef.addRow("Take Profit price", self.tp_edit)
         stop_row = QHBoxLayout()
         stop_row.addWidget(self.sl_edit, 1)
         self.max_stop_btn = QPushButton("MAX STOP")
-        self.max_stop_btn.setToolTip(
-            "Arm dynamic MAX STOP: the Stop price is recalculated from the latest live price "
-            "again immediately before replacement creation."
-        )
+        self.max_stop_btn.setMinimumWidth(135)
+        self.max_stop_btn.setToolTip("Arm dynamic MAX STOP. The candidate follows the latest price and is recalculated again immediately before CREATE.")
         self.max_stop_btn.clicked.connect(self._apply_max_stop)
         stop_row.addWidget(self.max_stop_btn)
-        ef.addRow("Stop price", stop_row)
+        ef.addRow("Stop Loss price", stop_row)
         ef.addRow("Quantity (original)", self.qty_edit)
-        ef.addRow("State", self.state_label)
-        self.activate_btn = QPushButton("ACTIVATE")
-        self.activate_btn.setMinimumHeight(52)
+        self.state_label = QLabel("No OCO selected")
+        self.state_label.setWordWrap(True)
+        ef.addRow("Workflow state", self.state_label)
+        self.activate_btn = QPushButton("ACTIVATE REPLACEMENT")
+        self.activate_btn.setObjectName("primaryButton")
+        self.activate_btn.setMinimumHeight(50)
+        self.activate_btn.setToolTip("Final action: validate → cancel selected OCO → create replacement → confirm new OCO")
         self.activate_btn.clicked.connect(self._activate)
         ef.addRow(self.activate_btn)
         right.addWidget(editor_box)
 
-        raw_box = QGroupBox("Selected OCO — all preserved exchange fields")
+        raw_box = QGroupBox("Selected OCO — Preserved Exchange Fields")
         raw_layout = QVBoxLayout(raw_box)
         self.raw_table = QTableWidget(0, 2)
         self.raw_table.setHorizontalHeaderLabels(["Field", "Value"])
         self.raw_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.raw_table.verticalHeader().setVisible(False)
         raw_layout.addWidget(self.raw_table)
         right.addWidget(raw_box, 1)
 
@@ -157,52 +236,74 @@ class MainWindow(QMainWindow):
         self.event_log = QTableWidget(0, 2)
         self.event_log.setHorizontalHeaderLabels(["Event", "Details"])
         self.event_log.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.event_log.verticalHeader().setVisible(False)
         log_layout.addWidget(self.event_log)
         right.addWidget(log_box, 1)
 
         content.addLayout(left, 1)
         content.addLayout(right, 1)
         root.addLayout(content, 1)
-        self.setCentralWidget(central)
+        self.statusBar().showMessage("PAPER DEMO ready — select an active OCO to begin.")
 
-    def _refresh_orders(self) -> None:
+    def _refresh_orders(self, preserve_selection: bool = True) -> None:
+        selected_id: int | None = None
+        if preserve_selection and self.service.selection:
+            selected_id = self.service.selection.order_list_id
         orders = self.service.refresh_open_orders()
-        self.orders.setRowCount(len(orders))
-        for row, order in enumerate(orders):
-            upper = next((l.price for l in order.legs if l.price is not None and l.stop_price is None), None)
-            stop = next((l.stop_price for l in order.legs if l.stop_price is not None), None)
-            qty = order.legs[0].quantity if order.legs else Decimal("0")
-            values = [str(order.order_list_id), order.symbol, str(qty), str(upper or ""), str(stop or ""), order.status.value]
-            for col, value in enumerate(values):
-                self.orders.setItem(row, col, QTableWidgetItem(value))
-        self.orders.resizeColumnsToContents()
+        self._refreshing_orders = True
+        try:
+            self.orders.setRowCount(len(orders))
+            selected_row = -1
+            for row, order in enumerate(orders):
+                upper = next((l.price for l in order.legs if l.price is not None and l.stop_price is None), None)
+                stop = next((l.stop_price for l in order.legs if l.stop_price is not None), None)
+                qty = order.legs[0].quantity if order.legs else Decimal("0")
+                values = [str(order.order_list_id), order.symbol, str(qty), str(upper or ""), str(stop or ""), order.status.value]
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    if col == 0:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.orders.setItem(row, col, item)
+                if selected_id is not None and order.order_list_id == selected_id:
+                    selected_row = row
+            self.orders.resizeColumnsToContents()
+            if selected_row >= 0:
+                self.orders.selectRow(selected_row)
+        finally:
+            self._refreshing_orders = False
 
     def _select_current(self) -> None:
+        if self._refreshing_orders:
+            return
         rows = self.orders.selectionModel().selectedRows()
         if not rows:
             return
-        row = rows[0].row()
-        order_list_id = int(self.orders.item(row, 0).text())
+        id_item = self.orders.item(rows[0].row(), 0)
+        if id_item is None:
+            return
+        order_list_id = int(id_item.text())
         try:
             draft = self.service.select(order_list_id)
         except ValueError as exc:
             QMessageBox.warning(self, "Selection", str(exc))
             return
-
         self.tp_edit.setText(str(draft.values.get("abovePrice") or draft.values.get("leg1.price") or ""))
         self.sl_edit.setText(str(draft.values.get("belowStopPrice") or draft.values.get("leg2.stopPrice") or ""))
         self.qty_edit.setText(str(draft.values.get("quantity") or draft.values.get("leg1.quantity") or ""))
         self.monitor_symbol.setText(draft.selection.symbol)
+        self.target_label.setText(f"OCO {order_list_id} • {draft.selection.symbol} • locked for local editing; original remains active")
         self.state_label.setText(f"DRAFTING — OCO {order_list_id}; original remains active")
         self.original_status.setText("ACTIVE")
         self._populate_raw(draft.values)
         self._clear_log()
+        self.max_stop_btn.setText("MAX STOP")
         self._log("SELECT", f"Locked target OCO {order_list_id} ({draft.selection.symbol})")
         if self.unsubscribe:
             self.unsubscribe()
         self.unsubscribe = self.provider.subscribe_price(draft.selection.symbol, self._on_price)
         self._refresh_live()
         self._set_demo_enabled(True)
+        self.statusBar().showMessage(f"Selected OCO {order_list_id} — no exchange mutation until ACTIVATE.")
 
     def _populate_raw(self, values: dict[str, object]) -> None:
         self.raw_table.setRowCount(len(values))
@@ -212,7 +313,7 @@ class MainWindow(QMainWindow):
         self.raw_table.resizeColumnsToContents()
 
     def _on_price(self, price: Decimal) -> None:
-        self.live_price.setText(f"{price:f}  ● LIVE")
+        self.live_price.setText(f"{price:f}  • LIVE")
         symbol = self.monitor_symbol.text()
         if symbol and symbol != "—":
             try:
@@ -224,14 +325,16 @@ class MainWindow(QMainWindow):
 
     def _refresh_live(self) -> None:
         symbol = self.monitor_symbol.text()
-        if symbol and symbol != "—":
-            try:
-                self._on_price(self.provider.get_last_price(symbol))
-                current = self.provider.get_oco(self.service.selection.order_list_id) if self.service.selection else None
-                self.original_status.setText(current.status.value if current else "NOT FOUND")
-                self._refresh_orders()
-            except Exception:
-                pass
+        selection = self.service.selection
+        if not symbol or symbol == "—" or selection is None:
+            return
+        try:
+            self._on_price(self.provider.get_last_price(symbol))
+            current = self.provider.get_oco(selection.order_list_id)
+            self.original_status.setText(current.status.value if current else "NOT FOUND")
+            self._refresh_orders()
+        except Exception:
+            return
 
     def _move_price(self) -> None:
         symbol = self.monitor_symbol.text()
@@ -258,20 +361,21 @@ class MainWindow(QMainWindow):
             candidate = self.service.arm_max_stop()
             self.sl_edit.setText(f"{candidate:f}")
             self.max_stop_btn.setText("MAX STOP • ARMED")
-            self.state_label.setText("DYNAMIC MAX STOP ARMED — refreshed immediately before CREATE")
+            self.state_label.setText("DYNAMIC MAX STOP ARMED — recalculated immediately before CREATE")
+            self.max_stop.setText(f"{candidate:f}  ← armed candidate")
             price = self.provider.get_last_price(symbol)
             tick = self.provider.get_tick_size(symbol)
-            self.max_stop.setText(f"{candidate:f}  ← armed")
-            self._log("MAX STOP", f"Armed dynamic mode at current candidate {candidate} from price {price} (tick {tick})")
+            self._log("MAX STOP", f"Dynamic mode armed: candidate {candidate} from price {price} (tick {tick})")
         except Exception as exc:
             QMessageBox.warning(self, "MAX STOP", str(exc))
 
-    def _manual_stop_edit(self) -> None:
+    def _manual_stop_edit(self, _text: str) -> None:
         if self.service.max_stop_dynamic:
             self.service.max_stop_dynamic = False
             self.max_stop_btn.setText("MAX STOP")
+            self.state_label.setText("DRAFTING — manual Stop Loss is now fixed")
             if self.service.selection:
-                self._log("MAX STOP", "Dynamic mode disarmed by manual Stop price edit")
+                self._log("MAX STOP", "Dynamic mode disarmed by manual Stop Loss edit")
 
     def _force_execute(self, leg: str) -> None:
         if not self.service.selection:
@@ -310,6 +414,7 @@ class MainWindow(QMainWindow):
         self.max_stop.setText("—")
         self.tick_size.setText("—")
         self.original_status.setText("—")
+        self.target_label.setText("No OCO selected")
         self.tp_edit.clear()
         self.sl_edit.clear()
         self.qty_edit.clear()
@@ -319,8 +424,9 @@ class MainWindow(QMainWindow):
         self._clear_log()
         self.fail_place.setChecked(False)
         self.fail_cancel.setChecked(False)
-        self._refresh_orders()
+        self._refresh_orders(preserve_selection=False)
         self._log("RESET", "Paper state restored to initial demo fixtures")
+        self.statusBar().showMessage("PAPER DEMO reset.")
 
     def _clear_log(self) -> None:
         self.event_log.setRowCount(0)
@@ -333,6 +439,9 @@ class MainWindow(QMainWindow):
         self.event_log.scrollToBottom()
 
     def _activate(self) -> None:
+        if self.service.selection is None:
+            QMessageBox.information(self, "Activation", "Select an OCO first.")
+            return
         for name, edit in (("abovePrice", self.tp_edit), ("belowStopPrice", self.sl_edit)):
             value = edit.text().strip()
             if not value:
@@ -345,24 +454,28 @@ class MainWindow(QMainWindow):
                 return
             if not (name == "belowStopPrice" and self.service.max_stop_dynamic):
                 self.service.set_draft_field(name, value)
-
-        self._log("ACTIVATE", f"Requested for OCO {self.service.selection.order_list_id if self.service.selection else '—'}")
+        selected_id = self.service.selection.order_list_id
+        self._log("ACTIVATE", f"Requested for exact OCO {selected_id}")
+        self.statusBar().showMessage(f"Activating replacement for OCO {selected_id}…")
         result = self.service.activate()
         self.state_label.setText(f"{result.state.value} — {result.message}")
         if result.state.value == "SUCCESS":
             self.max_stop_btn.setText("MAX STOP")
             self._log("SUCCESS", f"Replacement created in {result.elapsed_ms:.2f} ms")
-            self._refresh_orders()
-            QMessageBox.information(self, "Activation", f"Paper replacement complete. {result.elapsed_ms:.2f} ms")
+            self._refresh_orders(preserve_selection=False)
+            self.statusBar().showMessage("Replacement created successfully.")
+            QMessageBox.information(self, "Activation", f"Paper replacement complete.\nElapsed: {result.elapsed_ms:.2f} ms")
         elif result.state.value == "FAILED_NEEDS_ATTENTION":
             self._log("FAILED", result.message)
+            self.statusBar().showMessage("FAILED_NEEDS_ATTENTION — manual review required.")
             QMessageBox.critical(self, "Activation failed", result.message)
         else:
             self._log("ABORTED", result.message)
+            self.statusBar().showMessage("Activation aborted; original protection was not changed.")
             QMessageBox.warning(self, "Activation", result.message)
 
     def _set_demo_enabled(self, enabled: bool) -> None:
-        for widget in (self.move_price_btn, self.tp_hit_btn, self.sl_hit_btn, self.fail_place, self.fail_cancel, self.max_stop_btn):
+        for widget in (self.move_price_btn, self.tp_hit_btn, self.sl_hit_btn, self.fail_place, self.fail_cancel, self.max_stop_btn, self.activate_btn):
             widget.setEnabled(enabled)
 
 
