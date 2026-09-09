@@ -15,7 +15,6 @@ import websockets
 
 from ocobot.domain.models import OCOOrder, OrderLeg
 
-
 TESTNET_REST = "https://testnet.binance.vision"
 TESTNET_WS = "wss://stream.testnet.binance.vision/ws"
 LIVE_REST = "https://api.binance.com"
@@ -30,13 +29,7 @@ class BinanceOCOProvider:
     API credentials are read only from constructor arguments or environment.
     """
 
-    def __init__(
-        self,
-        mode: str = "TESTNET",
-        api_key: str | None = None,
-        api_secret: str | None = None,
-        timeout: float = 5.0,
-    ) -> None:
+    def __init__(self, mode: str = "TESTNET", api_key: str | None = None, api_secret: str | None = None, timeout: float = 5.0) -> None:
         if mode not in {"TESTNET", "LIVE"}:
             raise ValueError("mode must be TESTNET or LIVE")
         self.mode = mode
@@ -129,6 +122,24 @@ class BinanceOCOProvider:
 
         return unsubscribe
 
+    def place_market_buy(self, symbol: str, quote_order_qty: Decimal) -> dict[str, Any]:
+        """Testnet-only setup helper; never available in LIVE mode."""
+        if self.mode != "TESTNET":
+            raise RuntimeError("Market-buy setup is TESTNET-only")
+        if quote_order_qty <= 0:
+            raise ValueError("quote_order_qty must be positive")
+        return self._signed_request(
+            "POST",
+            "/api/v3/order",
+            {
+                "symbol": symbol.upper(),
+                "side": "BUY",
+                "type": "MARKET",
+                "quoteOrderQty": str(quote_order_qty),
+                "newOrderRespType": "FULL",
+            },
+        )
+
     def cancel_oco(self, order_list_id: int) -> dict[str, Any]:
         if not self.api_key or not self.api_secret:
             raise RuntimeError("Binance credentials are not configured")
@@ -137,11 +148,7 @@ class BinanceOCOProvider:
             raise RuntimeError("Selected OCO no longer exists")
         if existing.order_list_id != order_list_id:
             raise RuntimeError("Selected OCO identity mismatch")
-        return self._signed_request(
-            "DELETE",
-            "/api/v3/orderList",
-            {"symbol": existing.symbol, "orderListId": order_list_id},
-        )
+        return self._signed_request("DELETE", "/api/v3/orderList", {"symbol": existing.symbol, "orderListId": order_list_id})
 
     def place_oco(self, payload: dict[str, Any]) -> dict[str, Any]:
         symbol = str(payload["symbol"])
@@ -149,14 +156,7 @@ class BinanceOCOProvider:
         quantity = str(payload["quantity"])
         above_type = str(payload.get("aboveType", "LIMIT_MAKER"))
         below_type = str(payload.get("belowType", "STOP_LOSS_LIMIT"))
-        params: dict[str, Any] = {
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-            "aboveType": above_type,
-            "belowType": below_type,
-            "newOrderRespType": "RESULT",
-        }
+        params: dict[str, Any] = {"symbol": symbol, "side": side, "quantity": quantity, "aboveType": above_type, "belowType": below_type, "newOrderRespType": "RESULT"}
         if payload.get("abovePrice") is not None:
             params["abovePrice"] = str(payload["abovePrice"])
         if payload.get("aboveStopPrice") is not None:
@@ -174,37 +174,9 @@ class BinanceOCOProvider:
     def _load_order_list(self, row: dict[str, Any]) -> OCOOrder:
         legs: list[OrderLeg] = []
         for ref in row.get("orders", []):
-            detail = self._signed_request(
-                "GET",
-                "/api/v3/order",
-                {"symbol": row["symbol"], "orderId": ref["orderId"]},
-            )
-            legs.append(
-                OrderLeg(
-                    symbol=str(detail["symbol"]),
-                    order_id=int(detail["orderId"]),
-                    client_order_id=str(detail["clientOrderId"]),
-                    side=str(detail["side"]),
-                    order_type=str(detail["type"]),
-                    status=str(detail["status"]),
-                    quantity=Decimal(str(detail.get("origQty", "0"))),
-                    price=Decimal(str(detail["price"])) if detail.get("price") not in {None, "", "0", "0.00000000"} else None,
-                    stop_price=Decimal(str(detail["stopPrice"])) if detail.get("stopPrice") not in {None, "", "0", "0.00000000"} else None,
-                    time_in_force=detail.get("timeInForce"),
-                    raw=detail,
-                )
-            )
-        return OCOOrder(
-            order_list_id=int(row["orderListId"]),
-            symbol=str(row["symbol"]),
-            contingency_type=str(row.get("contingencyType", "OCO")),
-            list_status_type=str(row.get("listStatusType", "UNKNOWN")),
-            list_order_status=str(row.get("listOrderStatus", "UNKNOWN")),
-            list_client_order_id=str(row.get("listClientOrderId", "")),
-            transaction_time=int(row.get("transactionTime", 0)),
-            legs=tuple(legs),
-            raw=row,
-        )
+            detail = self._signed_request("GET", "/api/v3/order", {"symbol": row["symbol"], "orderId": ref["orderId"]})
+            legs.append(OrderLeg(symbol=str(detail["symbol"]), order_id=int(detail["orderId"]), client_order_id=str(detail["clientOrderId"]), side=str(detail["side"]), order_type=str(detail["type"]), status=str(detail["status"]), quantity=Decimal(str(detail.get("origQty", "0"))), price=Decimal(str(detail["price"])) if detail.get("price") not in {None, "", "0", "0.00000000"} else None, stop_price=Decimal(str(detail["stopPrice"])) if detail.get("stopPrice") not in {None, "", "0", "0.00000000"} else None, time_in_force=detail.get("timeInForce"), raw=detail))
+        return OCOOrder(order_list_id=int(row["orderListId"]), symbol=str(row["symbol"]), contingency_type=str(row.get("contingencyType", "OCO")), list_status_type=str(row.get("listStatusType", "UNKNOWN")), list_order_status=str(row.get("listOrderStatus", "UNKNOWN")), list_client_order_id=str(row.get("listClientOrderId", "")), transaction_time=int(row.get("transactionTime", 0)), legs=tuple(legs), raw=row)
 
     def _public_request(self, method: str, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         response = self._http.request(method, self.rest_base + path, params=params)
@@ -235,17 +207,12 @@ def _decode_response(response: httpx.Response) -> Any:
     except Exception as exc:
         raise BinanceAPIError(None, response.text[:500], response.status_code) from exc
     if response.status_code >= 400 or (isinstance(data, dict) and "code" in data and int(data.get("code", 0)) < 0):
-        raise BinanceAPIError(
-            int(data["code"]) if isinstance(data, dict) and "code" in data else None,
-            str(data.get("msg", data)) if isinstance(data, dict) else str(data),
-            response.status_code,
-        )
+        raise BinanceAPIError(int(data["code"]) if isinstance(data, dict) and "code" in data else None, str(data.get("msg", data)) if isinstance(data, dict) else str(data), response.status_code)
     return data
 
 
 def _json_loads(raw: str | bytes) -> dict[str, Any]:
     import json
-
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("Unexpected Binance WebSocket payload")
