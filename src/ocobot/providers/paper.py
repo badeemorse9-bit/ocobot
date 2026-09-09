@@ -12,9 +12,15 @@ class PaperOCOProvider:
 
     ACTIVE_STATUSES = {OCOStatus.ACTIVE, OCOStatus.EXEC_STARTED}
 
-    def __init__(self, orders: list[OCOOrder], prices: dict[str, Decimal] | None = None) -> None:
+    def __init__(
+        self,
+        orders: list[OCOOrder],
+        prices: dict[str, Decimal] | None = None,
+        tick_sizes: dict[str, Decimal] | None = None,
+    ) -> None:
         self._orders = {o.order_list_id: o for o in orders}
         self._prices = dict(prices or {})
+        self._tick_sizes = dict(tick_sizes or {})
         self._subscribers: dict[str, list[Callable[[Decimal], None]]] = {}
         self.cancelled: list[int] = []
         self.placed_payloads: list[dict[str, Any]] = []
@@ -31,6 +37,12 @@ class PaperOCOProvider:
 
     def get_last_price(self, symbol: str) -> Decimal:
         return self._prices[symbol]
+
+    def get_tick_size(self, symbol: str) -> Decimal:
+        tick = self._tick_sizes.get(symbol)
+        if tick is None or tick <= 0:
+            raise KeyError(f"No tick size configured for {symbol}")
+        return tick
 
     def set_last_price(self, symbol: str, price: Decimal) -> None:
         """Move the simulated market and evaluate active OCO legs immediately."""
