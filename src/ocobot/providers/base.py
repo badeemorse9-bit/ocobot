@@ -23,6 +23,10 @@ class OCOProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_tick_size(self, symbol: str) -> Decimal:
+        raise NotImplementedError
+
+    @abstractmethod
     def subscribe_price(self, symbol: str, callback: Callable[[Decimal], None]) -> Callable[[], None]:
         """Subscribe and return an unsubscribe callback."""
         raise NotImplementedError
