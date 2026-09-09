@@ -65,29 +65,32 @@ class OCOEditorService:
     def set_draft_field(self, key: str, value: Any) -> None:
         if self.draft is None:
             raise RuntimeError("Select an OCO first")
+        if key == "belowStopPrice" and self.max_stop_dynamic:
+            self.max_stop_dynamic = False
         self.draft.set(key, value)
 
     def arm_max_stop(self) -> Decimal:
         """Arm dynamic MAX STOP and immediately show its current candidate."""
         if self.selection is None or self.draft is None:
             raise RuntimeError("Select an OCO first")
+        candidate = self._calculate_max_stop()
+        self.draft.set("belowStopPrice", str(candidate))
+        self.max_stop_dynamic = True
+        return candidate
+
+    def _calculate_max_stop(self) -> Decimal:
+        assert self.selection is not None
         price = self.provider.get_last_price(self.selection.symbol)
         tick = self.provider.get_tick_size(self.selection.symbol)
         candidate = highest_sell_stop_candidate(price, tick)
         if candidate <= 0:
             raise ValueError("Current price is too small for a positive tick-aligned stop.")
-        self.draft.set("belowStopPrice", str(candidate))
-        self.max_stop_dynamic = True
         return candidate
 
     def _refresh_dynamic_max_stop(self) -> Decimal | None:
         if not self.max_stop_dynamic or self.selection is None or self.draft is None:
             return None
-        price = self.provider.get_last_price(self.selection.symbol)
-        tick = self.provider.get_tick_size(self.selection.symbol)
-        candidate = highest_sell_stop_candidate(price, tick)
-        if candidate <= 0:
-            raise ValueError("Current price is too small for a positive tick-aligned stop.")
+        candidate = self._calculate_max_stop()
         self.draft.set("belowStopPrice", str(candidate))
         return candidate
 
@@ -180,4 +183,8 @@ class OCOEditorService:
             "abovePrice": str(upper),
             "belowPrice": str(lower),
             "belowStopPrice": str(stop),
+            "aboveType": values.get("leg1.type", "LIMIT_MAKER"),
+            "belowType": values.get("leg2.type", "STOP_LOSS_LIMIT"),
+            "aboveTimeInForce": values.get("leg1.timeInForce") or None,
+            "belowTimeInForce": values.get("leg2.timeInForce") or None,
         }
