@@ -12,14 +12,12 @@ def provider(prices: dict[str, Decimal]) -> PaperOCOProvider:
 
 
 def test_selected_order_is_the_only_target() -> None:
-    exchange = provider({"TUTUSDT": Decimal("0.045183")})
+    exchange = provider({"TUTUSDT": Decimal("0.065183")})
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
     service.select(1002)
     service.set_draft_field("abovePrice", "0.07600")
     service.set_draft_field("belowStopPrice", "0.06100")
-
     result = service.activate()
-
     assert result.state.value == "SUCCESS"
     assert exchange.cancelled == [1002]
     assert len(exchange.placed_payloads) == 1
@@ -29,13 +27,11 @@ def test_selected_order_is_the_only_target() -> None:
 
 
 def test_old_order_stays_untouched_until_activation() -> None:
-    exchange = provider({"TUTUSDT": Decimal("0.045183")})
+    exchange = provider({"TUTUSDT": Decimal("0.065183")})
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
-
     draft = service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     assert exchange.cancelled == []
     assert exchange.get_oco(1001).status.value == "ACTIVE"
     assert draft.values["abovePrice"] == "0.07400"
@@ -48,9 +44,7 @@ def test_price_path_can_execute_selected_oco_during_drafting() -> None:
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     exchange.simulate_market_path("TUTUSDT", [Decimal("0.068"), Decimal("0.0699"), Decimal("0.0700")])
-
     current = exchange.get_oco(1001)
     assert current is not None
     assert current.status.value == "ALL_DONE"
@@ -70,13 +64,11 @@ def test_stop_path_executes_and_cancels_sibling() -> None:
 
 
 def test_original_is_not_canceled_when_replacement_draft_is_invalid() -> None:
-    exchange = provider({"TUTUSDT": Decimal("0.045183")})
+    exchange = provider({"TUTUSDT": Decimal("0.065183")})
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
     service.select(1001)
     service.set_draft_field("abovePrice", "")
-
     result = service.activate()
-
     assert result.state.value == "ABORTED"
     assert exchange.cancelled == []
     assert exchange.placed_payloads == []
@@ -89,9 +81,7 @@ def test_invalid_sell_oco_price_relationship_does_not_cancel_original() -> None:
     service.select(1001)
     service.set_draft_field("abovePrice", "0.064000")
     service.set_draft_field("belowStopPrice", "0.060000")
-
     result = service.activate()
-
     assert result.state.value == "ABORTED"
     assert "above last price" in result.message.lower()
     assert exchange.cancelled == []
@@ -100,15 +90,13 @@ def test_invalid_sell_oco_price_relationship_does_not_cancel_original() -> None:
 
 
 def test_replacement_failure_marks_attention_and_does_not_touch_other_orders() -> None:
-    exchange = provider({"TUTUSDT": Decimal("0.045183")})
+    exchange = provider({"TUTUSDT": Decimal("0.065183")})
     exchange.fail_next_place = True
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     result = service.activate()
-
     assert result.state.value == "FAILED_NEEDS_ATTENTION"
     assert exchange.cancelled == [1001]
     assert exchange.placed_payloads == []
@@ -117,29 +105,25 @@ def test_replacement_failure_marks_attention_and_does_not_touch_other_orders() -
 
 
 def test_cancel_failure_does_not_create_replacement() -> None:
-    exchange = provider({"TUTUSDT": Decimal("0.045183")})
+    exchange = provider({"TUTUSDT": Decimal("0.065183")})
     exchange.fail_next_cancel = True
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     result = service.activate()
-
     assert result.state.value == "FAILED_NEEDS_ATTENTION"
     assert exchange.placed_payloads == []
     assert exchange.get_oco(1001).status.value == "ACTIVE"
 
 
 def test_activation_timeline_is_cancel_then_place() -> None:
-    exchange = provider({"TUTUSDT": Decimal("0.045183")})
+    exchange = provider({"TUTUSDT": Decimal("0.065183")})
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     service.activate()
-
     assert exchange.activation_timeline == ["cancel:1001", "place:new"]
 
 
@@ -149,7 +133,6 @@ def test_max_stop_is_optional_until_armed() -> None:
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     assert service.max_stop_dynamic is False
     exchange.set_last_price("TUTUSDT", Decimal("0.069000"))
     assert service.draft.values["belowStopPrice"] == "0.06000"
@@ -161,19 +144,15 @@ def test_max_stop_uses_latest_price_again_immediately_before_create() -> None:
             result = super().cancel_oco(order_list_id)
             self.set_last_price("TUTUSDT", Decimal("0.070123"))
             return result
-
     exchange = PriceMovesDuringCancel(sample_ocos(), {"TUTUSDT": Decimal("0.065183")}, TICKS)
     service = OCOEditorService(exchange)  # type: ignore[arg-type]
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     armed = service.arm_max_stop()
     assert armed == Decimal("0.065182")
     assert service.max_stop_dynamic is True
-
     result = service.activate()
-
     assert result.state.value == "SUCCESS"
     assert exchange.cancelled == [1001]
     assert exchange.placed_payloads[0]["belowStopPrice"] == "0.070122"
@@ -185,10 +164,8 @@ def test_manual_stop_remains_fixed_without_dynamic_mode() -> None:
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     exchange.set_last_price("TUTUSDT", Decimal("0.069500"))
     result = service.activate()
-
     assert result.state.value == "SUCCESS"
     assert exchange.placed_payloads[0]["belowStopPrice"] == "0.06000"
 
@@ -199,16 +176,12 @@ def test_manual_stop_edit_disarms_dynamic_mode() -> None:
     service.select(1001)
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
-
     service.arm_max_stop()
     assert service.max_stop_dynamic is True
-
     service.set_draft_field("belowStopPrice", "0.06123")
     assert service.max_stop_dynamic is False
     assert service.draft.values["belowStopPrice"] == "0.06123"
-
     exchange.set_last_price("TUTUSDT", Decimal("0.069500"))
     result = service.activate()
-
     assert result.state.value == "SUCCESS"
     assert exchange.placed_payloads[0]["belowStopPrice"] == "0.06123"
