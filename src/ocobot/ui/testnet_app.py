@@ -3,17 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from PySide6.QtWidgets import (
-    QFormLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
 from ocobot.providers.binance import BinanceOCOProvider
 from ocobot.ui.main_window import MainWindow
@@ -38,8 +28,7 @@ def executed_average_price(response: dict[str, Any]) -> tuple[Decimal, Decimal]:
                 total_qty += qty
                 total_value += qty * price
         if total_qty > 0:
-            executed_qty = total_qty
-            return executed_qty, total_value / total_qty
+            return total_qty, total_value / total_qty
 
     if executed_qty <= 0:
         raise ValueError("Binance returned no executed quantity")
@@ -64,7 +53,6 @@ class TestnetTradeSetup(QGroupBox):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(5)
-
         note = QLabel(
             "TESTNET only. This utility is not part of V1 strategy logic. "
             "It creates a market BUY so the account has an asset on which we can create an OCO."
@@ -130,7 +118,6 @@ class TestnetTradeSetup(QGroupBox):
             amount = Decimal(self.amount_edit.text().strip())
             if amount <= 0:
                 raise ValueError("BUY amount must be positive")
-
             response = provider.place_market_buy(symbol, amount)
             qty, avg = executed_average_price(response)
             self.last_buy = response
@@ -140,9 +127,7 @@ class TestnetTradeSetup(QGroupBox):
             self.average_fill_label.setText(f"{avg:f}")
             self.buy_status.setText(f"FILLED — Binance orderId {response.get('orderId', '—')}")
             self.oco_button.setEnabled(True)
-            self.oco_status.setText(
-                "Enter TP, Stop trigger and Stop-limit prices. Quantity will be the actual executed BUY quantity."
-            )
+            self.oco_status.setText("Enter TP, Stop trigger and Stop-limit prices. Quantity will be the actual executed BUY quantity.")
             self.host.statusBar().showMessage("Testnet BUY filled; actual execution data captured.")
         except Exception as exc:
             self.buy_status.setText(f"BUY failed: {exc}")
@@ -154,15 +139,19 @@ class TestnetTradeSetup(QGroupBox):
             if self.executed_qty <= 0:
                 raise ValueError("Execute a successful Testnet BUY first")
             symbol = self.symbol_edit.text().strip().upper()
+            if not symbol.endswith("USDT"):
+                raise ValueError("Use a USDT Spot symbol for this test setup")
             tp = Decimal(self.tp_edit.text().strip())
             stop = Decimal(self.stop_edit.text().strip())
             stop_limit = Decimal(self.stop_limit_edit.text().strip())
             if min(tp, stop, stop_limit) <= 0:
                 raise ValueError("All OCO prices must be positive")
-            if not (tp > stop and tp > stop_limit):
-                raise ValueError("Take Profit must be above the stop prices for this SELL OCO")
-            if not (self.average_fill > stop):
-                raise ValueError("Stop trigger must be below the actual weighted average BUY fill")
+
+            current_price = provider.get_last_price(symbol)
+            if not (tp > current_price > stop):
+                raise ValueError(
+                    f"Current market price is {current_price}. For SELL OCO use Take Profit > current price > Stop trigger."
+                )
 
             payload = {
                 "symbol": symbol,
@@ -173,6 +162,7 @@ class TestnetTradeSetup(QGroupBox):
                 "belowStopPrice": str(stop),
                 "aboveType": "LIMIT_MAKER",
                 "belowType": "STOP_LOSS_LIMIT",
+                "belowTimeInForce": "GTC",
             }
             response = provider.place_oco(payload)
             list_id = response.get("orderListId")
@@ -199,7 +189,6 @@ class TestnetMainWindow(MainWindow):
 def run_app() -> None:
     from PySide6.QtWidgets import QApplication
     import sys
-
     app = QApplication(sys.argv)
     window = TestnetMainWindow()
     window.show()
