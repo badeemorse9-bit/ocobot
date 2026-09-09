@@ -125,7 +125,13 @@ class MainWindow(QMainWindow):
         self.qty_edit.setReadOnly(True)
         self.state_label = QLabel("No OCO selected")
         ef.addRow("TP price", self.tp_edit)
-        ef.addRow("Stop price", self.sl_edit)
+        stop_row = QHBoxLayout()
+        stop_row.addWidget(self.sl_edit, 1)
+        self.max_stop_btn = QPushButton("MAX STOP")
+        self.max_stop_btn.setToolTip("Use the highest tick-aligned sell stop below the current live price.")
+        self.max_stop_btn.clicked.connect(self._apply_max_stop)
+        stop_row.addWidget(self.max_stop_btn)
+        ef.addRow("Stop price", stop_row)
         ef.addRow("Quantity (original)", self.qty_edit)
         ef.addRow("State", self.state_label)
         self.activate_btn = QPushButton("ACTIVATE")
@@ -239,6 +245,24 @@ class MainWindow(QMainWindow):
         self.provider.set_last_price(symbol, price)
         self._log("PRICE", f"{before} → {price}")
 
+    def _apply_max_stop(self) -> None:
+        symbol = self.monitor_symbol.text()
+        if not symbol or symbol == "—" or self.service.selection is None:
+            QMessageBox.information(self, "MAX STOP", "Select an OCO first.")
+            return
+        try:
+            price = self.provider.get_last_price(symbol)
+            tick = self.provider.get_tick_size(symbol)
+            candidate = highest_sell_stop_candidate(price, tick)
+            if candidate <= 0:
+                raise ValueError("Current price is too small for a positive tick-aligned stop.")
+            self.sl_edit.setText(f"{candidate:f}")
+            self.service.set_draft_field("belowStopPrice", str(candidate))
+            self.max_stop.setText(f"{candidate:f}  ← applied")
+            self._log("MAX STOP", f"Applied {candidate} from live price {price} (tick {tick})")
+        except Exception as exc:
+            QMessageBox.warning(self, "MAX STOP", str(exc))
+
     def _force_execute(self, leg: str) -> None:
         if not self.service.selection:
             QMessageBox.information(self, "Paper Demo", "Select an OCO first.")
@@ -325,7 +349,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Activation", result.message)
 
     def _set_demo_enabled(self, enabled: bool) -> None:
-        for widget in (self.move_price_btn, self.tp_hit_btn, self.sl_hit_btn, self.fail_place, self.fail_cancel):
+        for widget in (self.move_price_btn, self.tp_hit_btn, self.sl_hit_btn, self.fail_place, self.fail_cancel, self.max_stop_btn):
             widget.setEnabled(enabled)
 
 
