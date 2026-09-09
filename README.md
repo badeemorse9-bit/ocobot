@@ -15,6 +15,7 @@ The selected OCO remains untouched while the user edits a local draft. Only `Act
 - Keep the original OCO untouched during drafting.
 - Show a separate live-market monitor after selection.
 - Show the current last price and a Binance-rule-derived highest currently valid sell stop candidate.
+- Provide a `MAX STOP` shortcut beside Stop Loss that writes the current tick-aligned maximum stop candidate into the local draft; it does not cancel or replace the live OCO.
 - One activation action for the selected OCO only.
 - Paper mode first; Binance Testnet next; live trading only after explicit validation.
 - No Market, no standalone Limit, no Trailing Stop, no new-position entry module in V1.
