@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
 from ocobot.providers.binance import BinanceOCOProvider
@@ -48,6 +49,9 @@ class TestnetTradeSetup(QGroupBox):
         self.executed_qty = Decimal("0")
         self.average_fill = Decimal("0")
         self._build()
+        self._price_timer = QTimer(self)
+        self._price_timer.timeout.connect(self._refresh_market_price)
+        self._price_timer.start(1500)
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -82,8 +86,10 @@ class TestnetTradeSetup(QGroupBox):
         fill_form = QFormLayout()
         self.executed_qty_label = QLabel("—")
         self.average_fill_label = QLabel("—")
+        self.current_price_label = QLabel("—")
         fill_form.addRow("Executed quantity", self.executed_qty_label)
         fill_form.addRow("Weighted average fill", self.average_fill_label)
+        fill_form.addRow("Current market price", self.current_price_label)
         layout.addLayout(fill_form)
 
         oco_box = QGroupBox("Create OCO from the actual filled quantity")
@@ -91,6 +97,9 @@ class TestnetTradeSetup(QGroupBox):
         self.tp_edit = QLineEdit()
         self.stop_edit = QLineEdit()
         self.stop_limit_edit = QLineEdit()
+        self.tp_edit.setPlaceholderText("Above current market price")
+        self.stop_edit.setPlaceholderText("Below current market price")
+        self.stop_limit_edit.setPlaceholderText("Usually at or below stop trigger for a sell stop-limit")
         self.oco_button = QPushButton("CREATE TESTNET OCO")
         self.oco_button.setEnabled(False)
         self.oco_button.clicked.connect(self._create_oco)
@@ -109,13 +118,28 @@ class TestnetTradeSetup(QGroupBox):
             raise RuntimeError("Switch OCObot to TESTNET mode first")
         return self.host.provider
 
+    def _refresh_market_price(self) -> None:
+        try:
+            symbol = self.symbol_edit.text().strip().upper()
+            if not symbol:
+                return
+            provider = self._provider()
+            price = provider.get_last_price(symbol)
+            self.current_price_label.setText(f"{price:f}")
+        except Exception:
+            # Background display must never interrupt the setup workflow.
+            pass
+
     def _place_buy(self) -> None:
         try:
             provider = self._provider()
             symbol = self.symbol_edit.text().strip().upper()
             if not symbol.endswith("USDT") or len(symbol) <= 4:
                 raise ValueError("For this setup utility, use a USDT Spot symbol such as BTCUSDT")
-            amount = Decimal(self.amount_edit.text().strip())
+            try:
+                amount = Decimal(self.amount_edit.text().strip())
+            except (InvalidOperation, ValueError):
+                raise ValueError("BUY amount must be a valid number, for example 20")
             if amount <= 0:
                 raise ValueError("BUY amount must be positive")
             response = provider.place_market_buy(symbol, amount)
@@ -127,11 +151,24 @@ class TestnetTradeSetup(QGroupBox):
             self.average_fill_label.setText(f"{avg:f}")
             self.buy_status.setText(f"FILLED — Binance orderId {response.get('orderId', '—')}")
             self.oco_button.setEnabled(True)
+            self._refresh_market_price()
             self.oco_status.setText("Enter TP, Stop trigger and Stop-limit prices. Quantity will be the actual executed BUY quantity.")
             self.host.statusBar().showMessage("Testnet BUY filled; actual execution data captured.")
         except Exception as exc:
             self.buy_status.setText(f"BUY failed: {exc}")
             QMessageBox.warning(self, "Testnet BUY", str(exc))
+
+    def _parse_price(self, edit: QLineEdit, label: str) -> Decimal:
+        text = edit.text().strip()
+        if not text:
+            raise ValueError(f"Enter {label} first")
+        try:
+            value = Decimal(text)
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"{label} must be a valid number")
+        if value <= 0:
+            raise ValueError(f"{label} must be greater than zero")
+        return value
 
     def _create_oco(self) -> None:
         try:
@@ -141,17 +178,18 @@ class TestnetTradeSetup(QGroupBox):
             symbol = self.symbol_edit.text().strip().upper()
             if not symbol.endswith("USDT"):
                 raise ValueError("Use a USDT Spot symbol for this test setup")
-            tp = Decimal(self.tp_edit.text().strip())
-            stop = Decimal(self.stop_edit.text().strip())
-            stop_limit = Decimal(self.stop_limit_edit.text().strip())
-            if min(tp, stop, stop_limit) <= 0:
-                raise ValueError("All OCO prices must be positive")
+            tp = self._parse_price(self.tp_edit, "Take Profit price")
+            stop = self._parse_price(self.stop_edit, "Stop trigger price")
+            stop_limit = self._parse_price(self.stop_limit_edit, "Stop-limit sell price")
 
             current_price = provider.get_last_price(symbol)
+            self.current_price_label.setText(f"{current_price:f}")
             if not (tp > current_price > stop):
                 raise ValueError(
                     f"Current market price is {current_price}. For SELL OCO use Take Profit > current price > Stop trigger."
                 )
+            if stop_limit > stop:
+                raise ValueError("For this SELL STOP_LOSS_LIMIT test, Stop-limit sell price should be at or below the Stop trigger price.")
 
             payload = {
                 "symbol": symbol,
