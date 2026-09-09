@@ -170,7 +170,7 @@ def test_manual_stop_remains_fixed_without_dynamic_mode() -> None:
     service.set_draft_field("abovePrice", "0.07400")
     service.set_draft_field("belowStopPrice", "0.06000")
 
-    exchange.set_last_price("TUTUSDT", Decimal("0.070123"))
+    exchange.set_last_price("TUTUSDT", Decimal("0.069500"))
     result = service.activate()
 
     assert result.state.value == "SUCCESS"
@@ -191,7 +191,7 @@ def test_manual_stop_edit_disarms_dynamic_mode() -> None:
     assert service.max_stop_dynamic is False
     assert service.draft.values["belowStopPrice"] == "0.06123"
 
-    exchange.set_last_price("TUTUSDT", Decimal("0.071234"))
+    exchange.set_last_price("TUTUSDT", Decimal("0.069500"))
     result = service.activate()
 
     assert result.state.value == "SUCCESS"
