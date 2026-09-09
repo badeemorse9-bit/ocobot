@@ -45,7 +45,6 @@ class OCOEditorService:
 
     @staticmethod
     def _draft_values(order: OCOOrder) -> dict[str, Any]:
-        # Preserve raw Binance fields so the UI/provider can expand without inventing fields.
         values: dict[str, Any] = {"orderListId": order.order_list_id, "symbol": order.symbol}
         values.update(order.raw)
         for index, leg in enumerate(order.legs, start=1):
@@ -82,15 +81,26 @@ class OCOEditorService:
             self.state = ActivationState.ABORTED
             return ActivationResult(self.state, message)
         assert self.selection is not None and self.draft is not None
+
+        # Build/validate everything that can be validated BEFORE canceling the live order.
+        try:
+            payload = self._build_create_payload(self.draft)
+        except Exception as exc:
+            self.state = ActivationState.ABORTED
+            return ActivationResult(self.state, f"Draft rejected before cancellation: {exc}")
+
         self.state = ActivationState.VERIFYING
         start = time.perf_counter()
         try:
             self.state = ActivationState.CANCELLING
             cancel_result = self.provider.cancel_oco(self.selection.order_list_id)
             self.state = ActivationState.CREATING
-            payload = self._build_create_payload(self.draft)
             create_result = self.provider.place_oco(payload)
             self.state = ActivationState.CONFIRMING
+            # Provider returns the created list identifier; verification of its ACTIVE state
+            # is intentionally kept provider-specific for the live adapter.
+            if not create_result.get("orderListId"):
+                raise RuntimeError("Replacement was created without an orderListId")
             self.state = ActivationState.SUCCESS
             elapsed = (time.perf_counter() - start) * 1000
             return ActivationResult(self.state, "OCO replacement created", cancel_result, create_result, elapsed)
@@ -101,7 +111,6 @@ class OCOEditorService:
 
     @staticmethod
     def _build_create_payload(draft: OCODraft) -> dict[str, Any]:
-        # V1 paper payload uses the explicit fields required by the provider.
         values = draft.values
         try:
             qty = values.get("quantity") or values.get("leg1.quantity") or values.get("leg2.quantity")
