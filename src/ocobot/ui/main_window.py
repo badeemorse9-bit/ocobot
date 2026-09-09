@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         ef = QFormLayout(editor_box)
         self.tp_edit = QLineEdit()
         self.sl_edit = QLineEdit()
+        self.sl_edit.editingFinished.connect(self._manual_stop_edit)
         self.qty_edit = QLineEdit()
         self.qty_edit.setReadOnly(True)
         self.state_label = QLabel("No OCO selected")
@@ -128,7 +129,10 @@ class MainWindow(QMainWindow):
         stop_row = QHBoxLayout()
         stop_row.addWidget(self.sl_edit, 1)
         self.max_stop_btn = QPushButton("MAX STOP")
-        self.max_stop_btn.setToolTip("Use the highest tick-aligned sell stop below the current live price.")
+        self.max_stop_btn.setToolTip(
+            "Arm dynamic MAX STOP: the Stop price is recalculated from the latest live price "
+            "again immediately before replacement creation."
+        )
         self.max_stop_btn.clicked.connect(self._apply_max_stop)
         stop_row.addWidget(self.max_stop_btn)
         ef.addRow("Stop price", stop_row)
@@ -251,17 +255,23 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "MAX STOP", "Select an OCO first.")
             return
         try:
+            candidate = self.service.arm_max_stop()
+            self.sl_edit.setText(f"{candidate:f}")
+            self.max_stop_btn.setText("MAX STOP • ARMED")
+            self.state_label.setText("DYNAMIC MAX STOP ARMED — refreshed immediately before CREATE")
             price = self.provider.get_last_price(symbol)
             tick = self.provider.get_tick_size(symbol)
-            candidate = highest_sell_stop_candidate(price, tick)
-            if candidate <= 0:
-                raise ValueError("Current price is too small for a positive tick-aligned stop.")
-            self.sl_edit.setText(f"{candidate:f}")
-            self.service.set_draft_field("belowStopPrice", str(candidate))
-            self.max_stop.setText(f"{candidate:f}  ← applied")
-            self._log("MAX STOP", f"Applied {candidate} from live price {price} (tick {tick})")
+            self.max_stop.setText(f"{candidate:f}  ← armed")
+            self._log("MAX STOP", f"Armed dynamic mode at current candidate {candidate} from price {price} (tick {tick})")
         except Exception as exc:
             QMessageBox.warning(self, "MAX STOP", str(exc))
+
+    def _manual_stop_edit(self) -> None:
+        if self.service.max_stop_dynamic:
+            self.service.max_stop_dynamic = False
+            self.max_stop_btn.setText("MAX STOP")
+            if self.service.selection:
+                self._log("MAX STOP", "Dynamic mode disarmed by manual Stop price edit")
 
     def _force_execute(self, leg: str) -> None:
         if not self.service.selection:
@@ -304,6 +314,7 @@ class MainWindow(QMainWindow):
         self.sl_edit.clear()
         self.qty_edit.clear()
         self.state_label.setText("No OCO selected")
+        self.max_stop_btn.setText("MAX STOP")
         self.raw_table.setRowCount(0)
         self._clear_log()
         self.fail_place.setChecked(False)
@@ -332,12 +343,14 @@ class MainWindow(QMainWindow):
             except InvalidOperation:
                 QMessageBox.warning(self, "Draft", f"Invalid decimal in {name}.")
                 return
-            self.service.set_draft_field(name, value)
+            if not (name == "belowStopPrice" and self.service.max_stop_dynamic):
+                self.service.set_draft_field(name, value)
 
         self._log("ACTIVATE", f"Requested for OCO {self.service.selection.order_list_id if self.service.selection else '—'}")
         result = self.service.activate()
         self.state_label.setText(f"{result.state.value} — {result.message}")
         if result.state.value == "SUCCESS":
+            self.max_stop_btn.setText("MAX STOP")
             self._log("SUCCESS", f"Replacement created in {result.elapsed_ms:.2f} ms")
             self._refresh_orders()
             QMessageBox.information(self, "Activation", f"Paper replacement complete. {result.elapsed_ms:.2f} ms")
