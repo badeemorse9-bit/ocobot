@@ -1,6 +1,6 @@
 # Interactive Paper Demo
 
-The application now includes an interactive Paper Simulator in the same desktop window.
+The application includes an interactive Paper Simulator in the same desktop window.
 
 ## What the demo proves
 
@@ -14,16 +14,26 @@ The application now includes an interactive Paper Simulator in the same desktop 
 - A simulated cancellation failure does not create a replacement.
 - Other OCOs remain untouched.
 
+## MAX STOP behavior
+
+**MAX STOP is optional.** A manually entered Stop price remains a normal fixed draft value.
+
+When the user presses **MAX STOP**, it arms a dynamic mode for the selected OCO. The displayed Stop value is calculated immediately from the current price, but that value is not treated as final.
+
+At activation, the application refreshes the Stop candidate from the latest available price again before cancellation, and then refreshes it once more immediately after cancellation and before creating the replacement. This means price movements during the activation sequence are reflected as late as the provider can observe them.
+
+Editing the Stop price manually disarms dynamic MAX STOP mode. Editing TP does not disarm it. Selecting another OCO or resetting the demo also clears it.
+
 ## Demo sequence
 
 1. Start the application with `python -m ocobot`.
 2. Select `OCO 1001` (TUTUSDT) from the table.
 3. Change TP/SL fields in the local editor. No exchange action happens.
-4. Use **MOVE PRICE** to simulate market movement.
-5. Use **SIMULATE TP HIT** or **SIMULATE SL HIT** to force the selected leg to fill.
-6. Notice that the selected original becomes `ALL_DONE` and the editor reports that activation must abort.
-7. Press **RESET DEMO**, select an OCO again, prepare a draft, and press **ACTIVATE** to see `cancel → place` in the event log.
-8. Enable **Fail next replacement creation**, then press **ACTIVATE** to test the recovery state.
+4. Press **MAX STOP** to arm dynamic mode, or leave it off and use a manual Stop value.
+5. Use **MOVE PRICE** to simulate market movement.
+6. Press **ACTIVATE**. With MAX STOP armed, the replacement Stop is recalculated as late as possible in the activation path.
+7. Use **SIMULATE TP HIT** or **SIMULATE SL HIT** to force the selected original to complete and verify activation must abort.
+8. Press **RESET DEMO** and repeat with the failure toggles.
 
 ## Important boundary
 
