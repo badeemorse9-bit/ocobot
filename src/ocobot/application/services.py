@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from ocobot.domain.models import ActivationState, OCOOrder, OCODraft, OCOSelection
@@ -63,9 +64,27 @@ class OCOEditorService:
             raise RuntimeError("Select an OCO first")
         self.draft.set(key, value)
 
+    def _validate_draft_before_cancel(self) -> tuple[bool, str]:
+        if self.selection is None or self.draft is None:
+            return False, "No OCO selected"
+        values = self.draft.values
+        required = ("symbol", "quantity", "abovePrice", "belowPrice", "belowStopPrice")
+        missing = [key for key in required if not str(values.get(key, "")).strip()]
+        if missing:
+            return False, f"Draft is missing required OCO fields: {', '.join(missing)}"
+        for key in ("quantity", "abovePrice", "belowPrice", "belowStopPrice"):
+            try:
+                Decimal(str(values[key]))
+            except (InvalidOperation, ValueError):
+                return False, f"Draft field is not a valid decimal: {key}"
+        return True, "OK"
+
     def preflight(self) -> tuple[bool, str, OCOOrder | None]:
         if self.selection is None or self.draft is None:
             return False, "No OCO selected", None
+        valid_draft, draft_message = self._validate_draft_before_cancel()
+        if not valid_draft:
+            return False, draft_message, None
         current = self.provider.get_oco(self.selection.order_list_id)
         if current is None:
             return False, "Selected OCO no longer exists", None
@@ -82,7 +101,6 @@ class OCOEditorService:
             return ActivationResult(self.state, message)
         assert self.selection is not None and self.draft is not None
 
-        # Build/validate everything that can be validated BEFORE canceling the live order.
         try:
             payload = self._build_create_payload(self.draft)
         except Exception as exc:
@@ -97,8 +115,6 @@ class OCOEditorService:
             self.state = ActivationState.CREATING
             create_result = self.provider.place_oco(payload)
             self.state = ActivationState.CONFIRMING
-            # Provider returns the created list identifier; verification of its ACTIVE state
-            # is intentionally kept provider-specific for the live adapter.
             if not create_result.get("orderListId"):
                 raise RuntimeError("Replacement was created without an orderListId")
             self.state = ActivationState.SUCCESS
