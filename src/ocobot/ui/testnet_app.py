@@ -4,8 +4,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
+from ocobot.domain.validation import highest_sell_stop_candidate
 from ocobot.providers.binance import BinanceOCOProvider
 from ocobot.ui.main_window import MainWindow
 
@@ -99,13 +100,25 @@ class TestnetTradeSetup(QGroupBox):
         self.stop_limit_edit = QLineEdit()
         self.tp_edit.setPlaceholderText("Above current market price")
         self.stop_edit.setPlaceholderText("Below current market price")
-        self.stop_limit_edit.setPlaceholderText("Usually at or below stop trigger for a sell stop-limit")
-        self.oco_button = QPushButton("CREATE TESTNET OCO")
-        self.oco_button.setEnabled(False)
-        self.oco_button.clicked.connect(self._create_oco)
+        self.stop_limit_edit.setPlaceholderText("At or below stop trigger")
+        self.auto_stop_check = QCheckBox("Use automatic MAX STOP Loss")
+        self.auto_stop_check.setChecked(True)
+        self.auto_stop_check.setToolTip(
+            "At OCO creation, use Binance tick size and the live price to select the highest valid SELL stop below the current price."
+        )
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(self.auto_stop_check)
+        self.auto_stop_button = QPushButton("APPLY NOW")
+        self.auto_stop_button.clicked.connect(self._apply_auto_stop_loss)
+        auto_row.addWidget(self.auto_stop_button)
+        auto_row.addStretch(1)
+        oco_form.addRow("Stop Loss", auto_row)
         oco_form.addRow("Take Profit price", self.tp_edit)
         oco_form.addRow("Stop trigger price", self.stop_edit)
         oco_form.addRow("Stop-limit sell price", self.stop_limit_edit)
+        self.oco_button = QPushButton("CREATE TESTNET OCO")
+        self.oco_button.setEnabled(False)
+        self.oco_button.clicked.connect(self._create_oco)
         oco_form.addRow(self.oco_button)
         layout.addWidget(oco_box)
 
@@ -127,8 +140,29 @@ class TestnetTradeSetup(QGroupBox):
             price = provider.get_last_price(symbol)
             self.current_price_label.setText(f"{price:f}")
         except Exception:
-            # Background display must never interrupt the setup workflow.
             pass
+
+    def _apply_auto_stop_loss(self) -> None:
+        try:
+            provider = self._provider()
+            symbol = self.symbol_edit.text().strip().upper()
+            if not symbol.endswith("USDT") or len(symbol) <= 4:
+                raise ValueError("For this setup utility, use a USDT Spot symbol such as BTCUSDT")
+            current_price = provider.get_last_price(symbol)
+            tick = provider.get_tick_size(symbol)
+            stop = highest_sell_stop_candidate(current_price, tick)
+            stop_limit = stop - tick
+            if stop_limit <= 0:
+                raise ValueError("No positive stop-limit price is available for this symbol")
+            self.current_price_label.setText(f"{current_price:f}")
+            self.stop_edit.setText(f"{stop:f}")
+            self.stop_limit_edit.setText(f"{stop_limit:f}")
+            self.oco_status.setText(
+                f"Automatic MAX STOP applied from live price {current_price} using Binance tick size {tick}."
+            )
+        except Exception as exc:
+            self.oco_status.setText(f"Automatic Stop Loss failed: {exc}")
+            QMessageBox.warning(self, "Automatic Stop Loss", str(exc))
 
     def _place_buy(self) -> None:
         try:
@@ -152,7 +186,13 @@ class TestnetTradeSetup(QGroupBox):
             self.buy_status.setText(f"FILLED — Binance orderId {response.get('orderId', '—')}")
             self.oco_button.setEnabled(True)
             self._refresh_market_price()
-            self.oco_status.setText("Enter TP, Stop trigger and Stop-limit prices. Quantity will be the actual executed BUY quantity.")
+            if self.auto_stop_check.isChecked():
+                self._apply_auto_stop_loss()
+            self.oco_status.setText(
+                "BUY filled. Automatic MAX STOP is enabled; it will be refreshed again immediately before OCO creation."
+                if self.auto_stop_check.isChecked()
+                else "Enter TP, Stop trigger and Stop-limit prices. Quantity will be the actual executed BUY quantity."
+            )
             self.host.statusBar().showMessage("Testnet BUY filled; actual execution data captured.")
         except Exception as exc:
             self.buy_status.setText(f"BUY failed: {exc}")
@@ -178,12 +218,16 @@ class TestnetTradeSetup(QGroupBox):
             symbol = self.symbol_edit.text().strip().upper()
             if not symbol.endswith("USDT"):
                 raise ValueError("Use a USDT Spot symbol for this test setup")
+
+            current_price = provider.get_last_price(symbol)
+            self.current_price_label.setText(f"{current_price:f}")
+            if self.auto_stop_check.isChecked():
+                self._apply_auto_stop_loss()
+
             tp = self._parse_price(self.tp_edit, "Take Profit price")
             stop = self._parse_price(self.stop_edit, "Stop trigger price")
             stop_limit = self._parse_price(self.stop_limit_edit, "Stop-limit sell price")
 
-            current_price = provider.get_last_price(symbol)
-            self.current_price_label.setText(f"{current_price:f}")
             if not (tp > current_price > stop):
                 raise ValueError(
                     f"Current market price is {current_price}. For SELL OCO use Take Profit > current price > Stop trigger."
