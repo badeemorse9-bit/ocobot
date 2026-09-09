@@ -10,9 +10,15 @@ from ocobot.domain.models import OCOOrder, OrderLeg
 class PaperOCOProvider:
     """Deterministic in-memory provider for safe workflow testing."""
 
-    def __init__(self, orders: list[OCOOrder], prices: dict[str, Decimal] | None = None) -> None:
+    def __init__(
+        self,
+        orders: list[OCOOrder],
+        prices: dict[str, Decimal] | None = None,
+        tick_sizes: dict[str, Decimal] | None = None,
+    ) -> None:
         self._orders = {o.order_list_id: o for o in orders}
         self._prices = dict(prices or {})
+        self._tick_sizes = dict(tick_sizes or {})
         self._subscribers: dict[str, list[Callable[[Decimal], None]]] = {}
         self.cancelled: list[int] = []
         self.placed_payloads: list[dict[str, Any]] = []
@@ -25,6 +31,9 @@ class PaperOCOProvider:
 
     def get_last_price(self, symbol: str) -> Decimal:
         return self._prices[symbol]
+
+    def get_tick_size(self, symbol: str) -> Decimal:
+        return self._tick_sizes.get(symbol, Decimal("0.000001"))
 
     def set_last_price(self, symbol: str, price: Decimal) -> None:
         self._prices[symbol] = price
