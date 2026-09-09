@@ -57,10 +57,13 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _new_provider() -> PaperOCOProvider:
+        # Keep the Paper Demo free of the user's real-world symbols; unit tests
+        # retain their dedicated fixtures separately.
+        paper_orders = [order for order in sample_ocos() if order.symbol != "TUTUSDT"]
         return PaperOCOProvider(
-            sample_ocos(),
-            {"TUTUSDT": Decimal("0.06500"), "FIDAUSDT": Decimal("0.078210")},
-            {"TUTUSDT": Decimal("0.000001"), "FIDAUSDT": Decimal("0.000001")},
+            paper_orders,
+            {"FIDAUSDT": Decimal("0.078210")},
+            {"FIDAUSDT": Decimal("0.000001")},
         )
 
     @staticmethod
@@ -149,7 +152,7 @@ class MainWindow(QMainWindow):
         demo_layout.addWidget(self._section_title("Controlled Demo Actions", "These controls never call Binance."))
         price_row = QHBoxLayout()
         price_row.addWidget(QLabel("Simulated last price"))
-        self.price_input = QLineEdit("0.06500")
+        self.price_input = QLineEdit("0.078210")
         self.price_input.setMinimumWidth(150)
         price_row.addWidget(self.price_input)
         self.move_price_btn = QPushButton("MOVE PRICE")
@@ -278,7 +281,8 @@ class MainWindow(QMainWindow):
         rows = self.orders.selectionModel().selectedRows()
         if not rows:
             return
-        id_item = self.orders.item(rows[0].row(), 0)
+        row = rows[0].row()
+        id_item = self.orders.item(row, 0)
         if id_item is None:
             return
         order_list_id = int(id_item.text())
@@ -318,8 +322,9 @@ class MainWindow(QMainWindow):
         if symbol and symbol != "—":
             try:
                 tick = self.provider.get_tick_size(symbol)
+                candidate = highest_sell_stop_candidate(price, tick)
                 self.tick_size.setText(f"{tick:f}")
-                self.max_stop.setText(f"{highest_sell_stop_candidate(price, tick):f}")
+                self.max_stop.setText(f"{candidate:f}")
             except Exception:
                 self.max_stop.setText("—")
 
@@ -475,7 +480,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Activation", result.message)
 
     def _set_demo_enabled(self, enabled: bool) -> None:
-        for widget in (self.move_price_btn, self.tp_hit_btn, self.sl_hit_btn, self.fail_place, self.fail_cancel, self.max_stop_btn, self.activate_btn):
+        for widget in (
+            self.move_price_btn,
+            self.tp_hit_btn,
+            self.sl_hit_btn,
+            self.fail_place,
+            self.fail_cancel,
+            self.max_stop_btn,
+            self.activate_btn,
+        ):
             widget.setEnabled(enabled)
 
 
