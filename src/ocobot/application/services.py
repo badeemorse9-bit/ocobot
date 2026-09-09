@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from ocobot.domain.models import ActivationState, OCOOrder, OCODraft, OCOSelection
-from ocobot.domain.validation import highest_sell_stop_candidate
+from ocobot.domain.validation import highest_sell_stop_candidate, validate_sell_oco_relationship
 from ocobot.providers.base import OCOProvider
 
 
@@ -102,11 +102,31 @@ class OCOEditorService:
         missing = [key for key in required if not str(values.get(key, "")).strip()]
         if missing:
             return False, f"Draft is missing required OCO fields: {', '.join(missing)}"
+
+        decimals: dict[str, Decimal] = {}
         for key in ("quantity", "abovePrice", "belowPrice", "belowStopPrice"):
             try:
-                Decimal(str(values[key]))
+                decimals[key] = Decimal(str(values[key]))
             except (InvalidOperation, ValueError):
                 return False, f"Draft field is not a valid decimal: {key}"
+
+        if decimals["quantity"] <= 0:
+            return False, "Draft quantity must be positive"
+        if any(decimals[key] <= 0 for key in ("abovePrice", "belowPrice", "belowStopPrice")):
+            return False, "Draft prices must be positive"
+
+        try:
+            last_price = self.provider.get_last_price(str(values["symbol"]))
+        except Exception as exc:
+            return False, f"Unable to read current market price before cancellation: {exc}"
+
+        relationship_ok, relationship_message = validate_sell_oco_relationship(
+            last_price,
+            decimals["abovePrice"],
+            decimals["belowStopPrice"],
+        )
+        if not relationship_ok:
+            return False, relationship_message
         return True, "OK"
 
     def preflight(self) -> tuple[bool, str, OCOOrder | None]:
