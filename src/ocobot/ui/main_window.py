@@ -8,7 +8,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -187,7 +186,7 @@ class MainWindow(QMainWindow):
         self.mode_label = QLabel("PAPER")
         self.mode_label.setStyleSheet("color:#9fe0be;font-weight:800;padding:8px 4px;")
         side.addWidget(self.mode_label)
-        outer_layout.addWidget(side)
+        outer_layout.addWidget(sidebar)
 
         content = QWidget()
         content.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -585,6 +584,10 @@ class MainWindow(QMainWindow):
                 self.unsubscribe = provider.subscribe_price(symbol, self._price_bridge.push)
             except Exception as exc:
                 self.feed_state.setText(f"تعذر فتح البث: {exc}")
+            return
+        if kind == "dynamic_stop":
+            _, provider, symbol, future = payload
+            self._apply_dynamic_stop_result(provider, symbol, future)
             return
 
     def _render_orders(self, orders: list, preserve_selection: bool = False) -> None:
