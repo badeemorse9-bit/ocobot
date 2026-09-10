@@ -68,6 +68,33 @@ class OCOOrder:
             return OCOStatus.EXEC_STARTED
         return OCOStatus.UNKNOWN
 
+    @property
+    def take_profit_leg(self) -> OrderLeg:
+        """Return the non-stop SELL leg, independent of Binance array ordering."""
+        candidates = [
+            leg for leg in self.legs
+            if leg.side.upper() == "SELL"
+            and leg.stop_price is None
+            and leg.price is not None
+            and leg.order_type.upper() in {"LIMIT", "LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        raise ValueError("OCO does not contain exactly one identifiable take-profit leg")
+
+    @property
+    def stop_loss_leg(self) -> OrderLeg:
+        """Return the stop SELL leg, independent of Binance array ordering."""
+        candidates = [
+            leg for leg in self.legs
+            if leg.side.upper() == "SELL"
+            and leg.stop_price is not None
+            and leg.order_type.upper() in {"STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        raise ValueError("OCO does not contain exactly one identifiable stop-loss leg")
+
 
 @dataclass
 class OCOSelection:
