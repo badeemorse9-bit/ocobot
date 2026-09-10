@@ -26,26 +26,27 @@ from ocobot.providers.sample_data import sample_ocos
 
 
 STYLE = """
-QMainWindow, QWidget { background:#eef2f6; color:#182637; }
-QFrame#sidebar { background:#14243a; border:0; }
-QLabel#brand { color:white; font-size:22px; font-weight:800; }
-QLabel#sidehint { color:#9eb0c3; font-size:11px; }
-QPushButton#nav { background:transparent; color:#d9e3ee; border:0; border-radius:8px; padding:10px 12px; text-align:right; font-weight:700; }
-QPushButton#nav[selected="true"] { background:#285783; color:white; }
-QLabel#topStatus { color:#cfe4f7; font-weight:700; }
-QLabel#pageTitle { font-size:24px; font-weight:800; color:#172b40; }
-QLabel#pageSubtitle { color:#6e7d8d; font-size:12px; }
-QFrame#card { background:white; border:1px solid #d7e0e8; border-radius:12px; }
-QLabel#metricLabel { color:#728294; font-size:11px; }
-QLabel#metricValue { color:#172b40; font-size:22px; font-weight:800; }
-QLabel#sectionTitle { font-size:15px; font-weight:800; color:#25384c; }
-QLabel#muted { color:#718092; }
-QLabel#value { font-weight:700; }
-QTableWidget { background:white; border:0; gridline-color:#e8edf2; selection-background-color:#dcecff; selection-color:#14243a; font-size:12px; }
-QHeaderView::section { background:#f3f6f8; color:#3d4e5f; padding:8px; border:0; border-bottom:1px solid #d7e0e8; font-weight:800; }
-QPushButton#refresh { background:#246fd1; color:white; border:0; border-radius:7px; padding:8px 13px; font-weight:800; }
-QLabel#green { color:#1b9861; font-weight:800; }
-QLabel#amber { color:#8b6410; font-weight:800; }
+QMainWindow, QWidget { background:#031021; color:#e8f1f8; }
+QFrame#sidebar { background:#020d1c; border:0; }
+QLabel#brand { color:#f3f8fb; font-size:22px; font-weight:800; }
+QLabel#sidehint { color:#6f8ba3; font-size:11px; }
+QPushButton#nav { background:transparent; color:#b9c9d8; border:0; border-radius:7px; padding:10px 12px; text-align:right; font-weight:700; }
+QPushButton#nav[selected="true"] { background:#073b42; color:#e9ffff; border-left:2px solid #19c58b; }
+QLabel#topStatus { color:#83a5bd; font-weight:700; }
+QLabel#pageTitle { font-size:24px; font-weight:800; color:#f0f7fb; }
+QLabel#pageSubtitle { color:#6e8aa0; font-size:12px; }
+QFrame#card { background:#061529; border:1px solid #0d2a43; border-radius:10px; }
+QLabel#metricLabel { color:#64829a; font-size:11px; }
+QLabel#metricValue { color:#f0f7fb; font-size:22px; font-weight:800; }
+QLabel#sectionTitle { font-size:15px; font-weight:800; color:#e8f3f8; }
+QLabel#muted { color:#6f8ba2; }
+QLabel#value { color:#e8f3f8; font-weight:700; }
+QTableWidget { background:#061529; color:#dce9f2; border:0; gridline-color:#0d2a43; selection-background-color:#083f42; selection-color:#f2ffff; font-size:12px; }
+QTableWidget::item { padding:6px; }
+QHeaderView::section { background:#081d32; color:#7895aa; padding:8px; border:0; border-bottom:1px solid #0d2a43; font-weight:800; }
+QPushButton#refresh { background:#0876e8; color:white; border:0; border-radius:7px; padding:8px 13px; font-weight:800; }
+QLabel#green { color:#19c58b; font-weight:800; }
+QLabel#amber { color:#f08f1b; font-weight:800; }
 """
 
 
