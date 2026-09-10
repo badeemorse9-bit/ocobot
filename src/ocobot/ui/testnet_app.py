@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
