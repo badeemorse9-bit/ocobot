@@ -80,73 +80,42 @@ class TestnetCredentialsDialog(QDialog):
 
 class MainWindow(QMainWindow):
     """Compact Arabic dashboard; selected-price updates come from WebSocket, not polling."""
-
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OCObot — محرر OCO الآمن V1")
         self.resize(1280, 720); self.setMinimumSize(1050, 650); self.setStyleSheet(APP_STYLE)
-        self.mode = "PAPER"
-        self.testnet_api_key = os.getenv("BINANCE_API_KEY", "")
-        self.testnet_api_secret = os.getenv("BINANCE_API_SECRET", "")
-        self.provider: OCOProvider = self._new_paper_provider()
-        self.service = OCOEditorService(self.provider)
-        self.unsubscribe: Callable[[], None] | None = None
-        self._tick_cache: dict[str, Decimal] = {}
-        self._price_bridge = PriceBridge(self); self._price_bridge.price.connect(self._on_price)
-        self._worker_bridge = WorkerBridge(self); self._worker_bridge.finished.connect(self._worker_finished)
-        self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocobot-ui")
-        self.trail: AutoTrailEngine | None = None
-        self._building_table = False
-        self._build_ui(); self._refresh_orders(False); self._set_mode_visuals()
-        self.statusBar().showMessage("وضع الورق جاهز — اختر OCO واحدًا للبدء")
+        self.mode="PAPER"; self.testnet_api_key=os.getenv("BINANCE_API_KEY",""); self.testnet_api_secret=os.getenv("BINANCE_API_SECRET","")
+        self.provider:OCOProvider=self._new_paper_provider(); self.service=OCOEditorService(self.provider); self.unsubscribe:Callable[[],None]|None=None; self._tick_cache:dict[str,Decimal]={}
+        self._price_bridge=PriceBridge(self); self._price_bridge.price.connect(self._on_price); self._worker_bridge=WorkerBridge(self); self._worker_bridge.finished.connect(self._worker_finished); self._workers=ThreadPoolExecutor(max_workers=2,thread_name_prefix="ocobot-ui")
+        self.trail:AutoTrailEngine|None=None; self._building_table=False
+        self._build_ui(); self._refresh_orders(False); self._set_mode_visuals(); self.statusBar().showMessage("وضع الورق جاهز — اختر OCO واحدًا للبدء")
 
     @staticmethod
-    def _new_paper_provider() -> PaperOCOProvider:
-        orders = [o for o in sample_ocos() if o.symbol != "TUTUSDT"]
-        return PaperOCOProvider(orders, {"FIDAUSDT": Decimal("0.078210")}, {"FIDAUSDT": Decimal("0.000001")})
+    def _new_paper_provider()->PaperOCOProvider:
+        orders=[o for o in sample_ocos() if o.symbol!="TUTUSDT"]
+        return PaperOCOProvider(orders,{"FIDAUSDT":Decimal("0.078210")},{"FIDAUSDT":Decimal("0.000001")})
 
-    def _build_ui(self) -> None:
-        root = QVBoxLayout(); root.setContentsMargins(10,7,10,8); root.setSpacing(6)
-        central = QWidget(); central.setLayout(root); self.setCentralWidget(central)
-
-        header = QHBoxLayout(); brand=QLabel("OCObot"); brand.setFont(QFont("Segoe UI",22,QFont.Weight.Bold)); sub=QLabel("محرر OCO الآمن • V1"); sub.setStyleSheet("color:#687581;font-size:13px;")
-        header.addWidget(brand); header.addWidget(sub); header.addStretch()
+    def _build_ui(self)->None:
+        root=QVBoxLayout(); root.setContentsMargins(10,7,10,8); root.setSpacing(6); central=QWidget(); central.setLayout(root); self.setCentralWidget(central)
+        header=QHBoxLayout(); brand=QLabel("OCObot"); brand.setFont(QFont("Segoe UI",22,QFont.Weight.Bold)); sub=QLabel("محرر OCO الآمن • V1"); sub.setStyleSheet("color:#687581;font-size:13px;"); header.addWidget(brand); header.addWidget(sub); header.addStretch()
         self.paper_mode_btn=QPushButton("ورقي"); self.testnet_mode_btn=QPushButton("TESTNET"); self.api_button=QPushButton("إعداد API")
         for b in (self.paper_mode_btn,self.testnet_mode_btn): b.setMinimumWidth(84)
         self.paper_mode_btn.clicked.connect(lambda:self._switch_mode("PAPER")); self.testnet_mode_btn.clicked.connect(lambda:self._switch_mode("TESTNET")); self.api_button.clicked.connect(self._open_credentials)
-        header.addWidget(self.paper_mode_btn); header.addWidget(self.testnet_mode_btn); header.addWidget(self.api_button)
-        self.connection=QLabel(); self.connection.setStyleSheet("font-weight:700;margin-left:5px;"); header.addWidget(self.connection); root.addLayout(header)
-
-        safety=QFrame(); safety.setStyleSheet("QFrame{background:#fff8e8;border:1px solid #efd79a;border-radius:6px;}"); sr=QHBoxLayout(safety); sr.setContentsMargins(8,4,8,4)
-        lock=QLabel("OCO المحدد:"); lock.setStyleSheet("font-weight:800;color:#7c5a08;"); sr.addWidget(lock)
-        self.target_label=QLabel("لا يوجد طلب محدد"); self.target_label.setStyleSheet("color:#5e4a16;"); sr.addWidget(self.target_label,1); sr.addWidget(QLabel("التعديل محلي حتى التفعيل")); root.addWidget(safety)
-
+        header.addWidget(self.paper_mode_btn); header.addWidget(self.testnet_mode_btn); header.addWidget(self.api_button); self.connection=QLabel(); self.connection.setStyleSheet("font-weight:700;margin-left:5px;"); header.addWidget(self.connection); root.addLayout(header)
+        safety=QFrame(); safety.setStyleSheet("QFrame{background:#fff8e8;border:1px solid #efd79a;border-radius:6px;}"); sr=QHBoxLayout(safety); sr.setContentsMargins(8,4,8,4); lock=QLabel("OCO المحدد:"); lock.setStyleSheet("font-weight:800;color:#7c5a08;"); sr.addWidget(lock); self.target_label=QLabel("لا يوجد طلب محدد"); self.target_label.setStyleSheet("color:#5e4a16;"); sr.addWidget(self.target_label,1); sr.addWidget(QLabel("التعديل محلي حتى التفعيل")); root.addWidget(safety)
         grid=QGridLayout(); grid.setHorizontalSpacing(8); grid.setVerticalSpacing(6); grid.setColumnStretch(0,1); grid.setColumnStretch(1,1); root.addLayout(grid)
-
-        orders=QGroupBox("الأوامر المفتوحة"); ol=QVBoxLayout(orders); ol.setContentsMargins(6,6,6,6); ol.setSpacing(4); top=QHBoxLayout()
-        t=QLabel("اختر OCO واحدًا فقط"); t.setStyleSheet("font-weight:800;"); top.addWidget(t); top.addStretch(); self.refresh_btn=QPushButton("تحديث"); self.refresh_btn.clicked.connect(lambda:self._refresh_orders(True)); top.addWidget(self.refresh_btn); ol.addLayout(top)
+        orders=QGroupBox("الأوامر المفتوحة"); ol=QVBoxLayout(orders); ol.setContentsMargins(6,6,6,6); ol.setSpacing(4); top=QHBoxLayout(); t=QLabel("اختر OCO واحدًا فقط"); t.setStyleSheet("font-weight:800;"); top.addWidget(t); top.addStretch(); self.refresh_btn=QPushButton("تحديث"); self.refresh_btn.clicked.connect(lambda:self._refresh_orders(True)); top.addWidget(self.refresh_btn); ol.addLayout(top)
         self.orders=QTableWidget(0,6); self.orders.setHorizontalHeaderLabels(["List ID","العملة","الكمية","البيع","الاستوب","الحالة"]); self.orders.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows); self.orders.setSelectionMode(QTableWidget.SelectionMode.SingleSelection); self.orders.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.orders.verticalHeader().setVisible(False); self.orders.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.orders.itemSelectionChanged.connect(self._select_current); self.orders.setMinimumHeight(205); self.orders.setMaximumHeight(230); ol.addWidget(self.orders); grid.addWidget(orders,0,0)
-
         selected=QGroupBox("الطلب المحدد — حي"); sl=QGridLayout(selected); sl.setContentsMargins(8,7,8,7); sl.setHorizontalSpacing(7); sl.setVerticalSpacing(5)
         for r,(caption,attr) in enumerate([("العملة","monitor_symbol"),("السعر الآن","live_price"),("أعلى Stop صالح","max_stop"),("Tick","tick_size"),("حالة OCO","original_status")]):
             lab=QLabel(caption); val=QLabel("—"); val.setStyleSheet("background:#f3f5f7;padding:4px 6px;border-radius:3px;font-weight:700;"); setattr(self,attr,val); sl.addWidget(lab,r,0); sl.addWidget(val,r,1)
         sl.setColumnStretch(1,1); grid.addWidget(selected,0,1)
-
-        trail=QGroupBox("تتبع الصعود التلقائي"); tl=QGridLayout(trail); tl.setContentsMargins(8,7,8,7); tl.setHorizontalSpacing(7); tl.setVerticalSpacing(5)
-        self.trigger_edit=QLineEdit("1.00"); self.tp_move_edit=QLineEdit("1.00"); self.sl_move_edit=QLineEdit("0.50")
+        trail=QGroupBox("تتبع الصعود التلقائي"); tl=QGridLayout(trail); tl.setContentsMargins(8,7,8,7); tl.setHorizontalSpacing(7); tl.setVerticalSpacing(5); self.trigger_edit=QLineEdit("1.00"); self.tp_move_edit=QLineEdit("1.00"); self.sl_move_edit=QLineEdit("0.50")
         for e in (self.trigger_edit,self.tp_move_edit,self.sl_move_edit): e.setMaximumWidth(115)
-        tl.addWidget(QLabel("التفعيل بعد صعود %"),0,0); tl.addWidget(self.trigger_edit,0,1); tl.addWidget(QLabel("تحريك البيع %"),0,2); tl.addWidget(self.tp_move_edit,0,3); tl.addWidget(QLabel("تحريك الاستوب %"),0,4); tl.addWidget(self.sl_move_edit,0,5)
-        self.trail_enable=QPushButton("تشغيل التتبع"); self.trail_enable.clicked.connect(self._toggle_trail); tl.addWidget(self.trail_enable,1,0,1,2); self.trail_state=QLabel("متوقف"); self.trail_state.setStyleSheet("font-weight:800;"); tl.addWidget(self.trail_state,1,2,1,4); self.anchor_label=QLabel("مرجع: —    التالي: —    حي: —"); tl.addWidget(self.anchor_label,2,0,1,6); grid.addWidget(trail,1,0,1,2)
-
-        editor=QGroupBox("تعديل سريع للـ OCO"); el=QGridLayout(editor); el.setContentsMargins(8,7,8,7); el.setHorizontalSpacing(7); el.setVerticalSpacing(5)
-        self.tp_edit=QLineEdit(); self.sl_edit=QLineEdit(); self.qty_edit=QLineEdit(); self.qty_edit.setReadOnly(True); el.addWidget(QLabel("سعر البيع"),0,0); el.addWidget(self.tp_edit,0,1); el.addWidget(QLabel("الكمية الأصلية"),0,2); el.addWidget(self.qty_edit,0,3)
-        stoprow=QHBoxLayout(); stoprow.addWidget(self.sl_edit,1); self.max_stop_btn=QPushButton("MAX STOP"); self.max_stop_btn.clicked.connect(self._apply_max_stop); stoprow.addWidget(self.max_stop_btn); el.addWidget(QLabel("الاستوب"),1,0); el.addLayout(stoprow,1,1)
-        self.activate_btn=QPushButton("تفعيل الاستبدال"); self.activate_btn.setObjectName("primary"); self.activate_btn.clicked.connect(self._activate); el.addWidget(self.activate_btn,1,2,1,2); self.state_label=QLabel("لا يوجد طلب محدد"); self.state_label.setStyleSheet("font-weight:700;"); el.addWidget(self.state_label,2,0,1,4); grid.addWidget(editor,2,0)
-
+        tl.addWidget(QLabel("التفعيل بعد صعود %"),0,0); tl.addWidget(self.trigger_edit,0,1); tl.addWidget(QLabel("تحريك البيع %"),0,2); tl.addWidget(self.tp_move_edit,0,3); tl.addWidget(QLabel("تحريك الاستوب %"),0,4); tl.addWidget(self.sl_move_edit,0,5); self.trail_enable=QPushButton("تشغيل التتبع"); self.trail_enable.clicked.connect(self._toggle_trail); tl.addWidget(self.trail_enable,1,0,1,2); self.trail_state=QLabel("متوقف"); self.trail_state.setStyleSheet("font-weight:800;"); tl.addWidget(self.trail_state,1,2,1,4); self.anchor_label=QLabel("مرجع: —    التالي: —    حي: —"); tl.addWidget(self.anchor_label,2,0,1,6); grid.addWidget(trail,1,0,1,2)
+        editor=QGroupBox("تعديل سريع للـ OCO"); el=QGridLayout(editor); el.setContentsMargins(8,7,8,7); el.setHorizontalSpacing(7); el.setVerticalSpacing(5); self.tp_edit=QLineEdit(); self.sl_edit=QLineEdit(); self.qty_edit=QLineEdit(); self.qty_edit.setReadOnly(True); el.addWidget(QLabel("سعر البيع"),0,0); el.addWidget(self.tp_edit,0,1); el.addWidget(QLabel("الكمية الأصلية"),0,2); el.addWidget(self.qty_edit,0,3); stoprow=QHBoxLayout(); stoprow.addWidget(self.sl_edit,1); self.max_stop_btn=QPushButton("MAX STOP"); self.max_stop_btn.clicked.connect(self._apply_max_stop); stoprow.addWidget(self.max_stop_btn); el.addWidget(QLabel("الاستوب"),1,0); el.addLayout(stoprow,1,1); self.activate_btn=QPushButton("تفعيل الاستبدال"); self.activate_btn.setObjectName("primary"); self.activate_btn.clicked.connect(self._activate); el.addWidget(self.activate_btn,1,2,1,2); self.state_label=QLabel("لا يوجد طلب محدد"); self.state_label.setStyleSheet("font-weight:700;"); el.addWidget(self.state_label,2,0,1,4); grid.addWidget(editor,2,0)
         activity=QGroupBox("آخر الأحداث"); al=QVBoxLayout(activity); al.setContentsMargins(6,6,6,6); self.event_log=QTableWidget(0,2); self.event_log.setHorizontalHeaderLabels(["الحدث","التفاصيل"]); self.event_log.verticalHeader().setVisible(False); self.event_log.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.event_log.setMinimumHeight(110); self.event_log.setMaximumHeight(135); al.addWidget(self.event_log); grid.addWidget(activity,2,1)
-
-        self.demo_box=QGroupBox("محاكي الورق"); dl=QGridLayout(self.demo_box); dl.setContentsMargins(8,7,8,7); dl.setHorizontalSpacing(6); dl.setVerticalSpacing(4); self.price_input=QLineEdit("0.078210"); self.move_price_btn=QPushButton("تحريك السعر"); self.move_price_btn.clicked.connect(self._move_price); self.tp_hit_btn=QPushButton("ضرب البيع"); self.tp_hit_btn.clicked.connect(lambda:self._force_execute("TP")); self.sl_hit_btn=QPushButton("ضرب الاستوب"); self.sl_hit_btn.clicked.connect(lambda:self._force_execute("SL")); self.reset_btn=QPushButton("إعادة العرض"); self.reset_btn.setObjectName("danger"); self.reset_btn.clicked.connect(self._reset_demo); self.fail_place=QCheckBox("فشل الإنشاء"); self.fail_cancel=QCheckBox("فشل الإلغاء"); self.fail_place.stateChanged.connect(self._toggle_fail_place); self.fail_cancel.stateChanged.connect(self._toggle_fail_cancel)
-        dl.addWidget(QLabel("السعر المحاكى"),0,0); dl.addWidget(self.price_input,0,1); dl.addWidget(self.move_price_btn,0,2); dl.addWidget(self.tp_hit_btn,0,3); dl.addWidget(self.sl_hit_btn,0,4); dl.addWidget(self.reset_btn,0,5); dl.addWidget(self.fail_place,1,0); dl.addWidget(self.fail_cancel,1,1); root.addWidget(self.demo_box)
+        self.demo_box=QGroupBox("محاكي الورق"); dl=QGridLayout(self.demo_box); dl.setContentsMargins(8,7,8,7); dl.setHorizontalSpacing(6); dl.setVerticalSpacing(4); self.price_input=QLineEdit("0.078210"); self.move_price_btn=QPushButton("تحريك السعر"); self.move_price_btn.clicked.connect(self._move_price); self.tp_hit_btn=QPushButton("ضرب البيع"); self.tp_hit_btn.clicked.connect(lambda:self._force_execute("TP")); self.sl_hit_btn=QPushButton("ضرب الاستوب"); self.sl_hit_btn.clicked.connect(lambda:self._force_execute("SL")); self.reset_btn=QPushButton("إعادة العرض"); self.reset_btn.setObjectName("danger"); self.reset_btn.clicked.connect(self._reset_demo); self.fail_place=QCheckBox("فشل الإنشاء"); self.fail_cancel=QCheckBox("فشل الإلغاء"); self.fail_place.stateChanged.connect(self._toggle_fail_place); self.fail_cancel.stateChanged.connect(self._toggle_fail_cancel); dl.addWidget(QLabel("السعر المحاكى"),0,0); dl.addWidget(self.price_input,0,1); dl.addWidget(self.move_price_btn,0,2); dl.addWidget(self.tp_hit_btn,0,3); dl.addWidget(self.sl_hit_btn,0,4); dl.addWidget(self.reset_btn,0,5); dl.addWidget(self.fail_place,1,0); dl.addWidget(self.fail_cancel,1,1); root.addWidget(self.demo_box)
 
     def _set_mode_visuals(self)->None:
         if self.mode=="PAPER": self.paper_mode_btn.setObjectName("on"); self.testnet_mode_btn.setObjectName("modeTest"); self.connection.setText("● ورقي — بدون Binance"); self.connection.setStyleSheet("color:#286b43;font-weight:700;")
@@ -156,37 +125,37 @@ class MainWindow(QMainWindow):
     def _open_credentials(self)->None:
         d=TestnetCredentialsDialog(self,self.testnet_api_key,self.testnet_api_secret)
         if d.exec()!=QDialog.DialogCode.Accepted:return
-        if not d.api_key or not d.api_secret: QMessageBox.warning(self,"API","أدخل المفتاحين."); return
-        self.testnet_api_key=d.api_key; self.testnet_api_secret=d.api_secret
-        if self.mode=="TESTNET": self._switch_mode("PAPER"); self._switch_mode("TESTNET")
+        if not d.api_key or not d.api_secret:QMessageBox.warning(self,"API","أدخل المفتاحين.");return
+        self.testnet_api_key=d.api_key;self.testnet_api_secret=d.api_secret
+        if self.mode=="TESTNET":self._switch_mode("PAPER");self._switch_mode("TESTNET")
 
     def _switch_mode(self,mode:str)->None:
         if mode==self.mode:
-            if mode=="TESTNET": self._refresh_orders(False)
+            if mode=="TESTNET":self._refresh_orders(False)
             return
-        self._stop_price_subscription(); self._disable_trail()
+        self._stop_price_subscription();self._disable_trail()
         if mode=="TESTNET":
-            if not self.testnet_api_key or not self.testnet_api_secret: self._open_credentials()
+            if not self.testnet_api_key or not self.testnet_api_secret:self._open_credentials()
             if not self.testnet_api_key or not self.testnet_api_secret:return
-            try: provider=BinanceOCOProvider(mode="TESTNET",api_key=self.testnet_api_key,api_secret=self.testnet_api_secret); provider.list_open_ocos()
-            except Exception as exc: QMessageBox.warning(self,"TESTNET",f"تعذر الاتصال:\n{exc}"); return
-            old=self.provider; self.provider=provider; self.service=OCOEditorService(provider); self._clear_selection_ui(); self._set_paper_controls_enabled(False); self._set_mode_visuals(); self._refresh_orders(False); getattr(old,"close",lambda:None)()
+            try:provider=BinanceOCOProvider(mode="TESTNET",api_key=self.testnet_api_key,api_secret=self.testnet_api_secret);provider.list_open_ocos()
+            except Exception as exc:QMessageBox.warning(self,"TESTNET",f"تعذر الاتصال:\n{exc}");return
+            old=self.provider;self.provider=provider;self.service=OCOEditorService(provider);self._tick_cache.clear();self._clear_selection_ui();self._set_paper_controls_enabled(False);self._set_mode_visuals();self._refresh_orders(False);getattr(old,"close",lambda:None)()
         else:
-            old=self.provider; self.provider=self._new_paper_provider(); self.service=OCOEditorService(self.provider); self._clear_selection_ui(); self.mode="PAPER"; self._set_paper_controls_enabled(True); self._set_mode_visuals(); self._refresh_orders(False); getattr(old,"close",lambda:None)()
+            old=self.provider;self.provider=self._new_paper_provider();self.service=OCOEditorService(self.provider);self._tick_cache.clear();self._clear_selection_ui();self.mode="PAPER";self._set_paper_controls_enabled(True);self._set_mode_visuals();self._refresh_orders(False);getattr(old,"close",lambda:None)()
 
     def _refresh_orders(self,preserve_selection:bool=True)->None:
         selected=self.service.selection.order_list_id if preserve_selection and self.service.selection else None
-        try: orders=self.service.refresh_open_orders()
+        try:orders=self.service.refresh_open_orders()
         except Exception as exc:
-            if self.mode=="TESTNET": self.statusBar().showMessage(f"خطأ قراءة الأوامر: {exc}")
+            if self.mode=="TESTNET":self.statusBar().showMessage(f"خطأ قراءة الأوامر: {exc}")
             return
         self._building_table=True
         try:
-            self.orders.setRowCount(len(orders)); row_to_select=-1
+            self.orders.setRowCount(len(orders));row_to_select=-1
             for r,o in enumerate(orders):
-                upper=next((leg.price for leg in o.legs if leg.price is not None and leg.stop_price is None),None); stop=next((leg.stop_price for leg in o.legs if leg.stop_price is not None),None); qty=o.legs[0].quantity if o.legs else Decimal("0"); vals=[str(o.order_list_id),o.symbol,str(qty),str(upper or ""),str(stop or ""),o.status.value]
-                for c,v in enumerate(vals): self.orders.setItem(r,c,QTableWidgetItem(v))
-                if selected is not None and o.order_list_id==selected: row_to_select=r
+                upper=next((leg.price for leg in o.legs if leg.price is not None and leg.stop_price is None),None);stop=next((leg.stop_price for leg in o.legs if leg.stop_price is not None),None);qty=o.legs[0].quantity if o.legs else Decimal("0");vals=[str(o.order_list_id),o.symbol,str(qty),str(upper or ""),str(stop or ""),o.status.value]
+                for c,v in enumerate(vals):self.orders.setItem(r,c,QTableWidgetItem(v))
+                if selected is not None and o.order_list_id==selected:row_to_select=r
             if row_to_select>=0:self.orders.selectRow(row_to_select)
         finally:self._building_table=False
 
@@ -198,10 +167,10 @@ class MainWindow(QMainWindow):
         except Exception:return
         try:draft=self.service.select(oid)
         except Exception as exc:QMessageBox.warning(self,"اختيار",str(exc));return
-        self._stop_price_subscription(); self._disable_trail(); self.tp_edit.setText(str(draft.values.get("abovePrice") or draft.values.get("leg1.price") or "")); self.sl_edit.setText(str(draft.values.get("belowStopPrice") or draft.values.get("leg2.stopPrice") or "")); self.qty_edit.setText(str(draft.values.get("quantity") or draft.values.get("leg1.quantity") or "")); self.monitor_symbol.setText(draft.selection.symbol); self.original_status.setText(str(draft.values.get("listOrderStatus") or "EXECUTING")); self.target_label.setText(f"{draft.selection.symbol} • OCO {oid} • الطلب الأصلي ما زال فعالًا"); self.state_label.setText("مسودة محلية — الأصل لم يتغير"); self._log("اختيار",f"تم تحديد OCO {oid}")
+        self._stop_price_subscription();self._disable_trail();self.tp_edit.setText(str(draft.values.get("abovePrice") or draft.values.get("leg1.price") or ""));self.sl_edit.setText(str(draft.values.get("belowStopPrice") or draft.values.get("leg2.stopPrice") or ""));self.qty_edit.setText(str(draft.values.get("quantity") or draft.values.get("leg1.quantity") or ""));self.monitor_symbol.setText(draft.selection.symbol);self.original_status.setText(str(draft.values.get("listOrderStatus") or "EXECUTING"));self.target_label.setText(f"{draft.selection.symbol} • OCO {oid} • الطلب الأصلي ما زال فعالًا");self.state_label.setText("مسودة محلية — الأصل لم يتغير");self._log("اختيار",f"تم تحديد OCO {oid}")
         try:self._tick_cache[draft.selection.symbol]=self.provider.get_tick_size(draft.selection.symbol)
         except Exception:self._tick_cache.pop(draft.selection.symbol,None)
-        self.unsubscribe=self.provider.subscribe_price(draft.selection.symbol,self._price_bridge.push); self.statusBar().showMessage(f"مراقبة لحظية: {draft.selection.symbol}")
+        self.unsubscribe=self.provider.subscribe_price(draft.selection.symbol,self._price_bridge.push);self.statusBar().showMessage(f"مراقبة لحظية: {draft.selection.symbol}")
 
     def _stop_price_subscription(self)->None:
         if self.unsubscribe:
@@ -210,43 +179,36 @@ class MainWindow(QMainWindow):
             self.unsubscribe=None
 
     def _on_price(self,price:Decimal)->None:
-        self.live_price.setText(f"{price:f}  • حي"); symbol=self.monitor_symbol.text()
+        self.live_price.setText(f"{price:f}  • حي");symbol=self.monitor_symbol.text()
         if not symbol or symbol=="—":return
         tick=self._tick_cache.get(symbol)
         if tick is None:
-            try:tick=self.provider.get_tick_size(symbol); self._tick_cache[symbol]=tick
+            try:tick=self.provider.get_tick_size(symbol);self._tick_cache[symbol]=tick
             except Exception:tick=None
-        if tick is not None:
-            self.tick_size.setText(f"{tick:f}"); self.max_stop.setText(f"{highest_sell_stop_candidate(price,tick):f}")
-        if self.trail and self.trail.snapshot().enabled:
-            snap=self.trail.snapshot(); self.anchor_label.setText(f"مرجع: {snap.anchor_price or '—'}    التالي: {snap.next_trigger or '—'}    حي: {price}")
+        if tick is not None:self.tick_size.setText(f"{tick:f}");self.max_stop.setText(f"{highest_sell_stop_candidate(price,tick):f}")
+        if self.trail and self.trail.snapshot().enabled and self.trail.snapshot().latest_price != price:self.anchor_label.setText(f"مرجع: {self.trail.snapshot().anchor_price or '—'}    التالي: {self.trail.snapshot().next_trigger or '—'}    حي: {price}")
 
     def _apply_max_stop(self)->None:
         if not self.service.selection:QMessageBox.information(self,"MAX STOP","اختر OCO أولًا.");return
-        try:c=self.service.arm_max_stop(); self.sl_edit.setText(f"{c:f}"); self._log("MAX STOP",f"تم ضبط الاستوب {c}"); self.state_label.setText("MAX STOP جاهز — يعاد تحديثه لحظة التفعيل")
+        try:c=self.service.arm_max_stop();self.sl_edit.setText(f"{c:f}");self._log("MAX STOP",f"تم ضبط الاستوب {c}");self.state_label.setText("MAX STOP جاهز — يعاد تحديثه لحظة التفعيل")
         except Exception as exc:QMessageBox.warning(self,"MAX STOP",str(exc))
 
     def _toggle_trail(self)->None:
-        if self.trail and self.trail.snapshot().enabled:
-            self._disable_trail(); self._resubscribe_selected(); return
+        if self.trail and self.trail.snapshot().enabled:self._disable_trail();self._resubscribe_selected();return
         if not self.service.original or not self.service.selection:QMessageBox.information(self,"التتبع","اختر OCO أولًا.");return
         try:
-            settings=AutoTrailSettings.parse(self.trigger_edit.text(),self.tp_move_edit.text(),self.sl_move_edit.text()); live=self.provider.get_last_price(self.service.selection.symbol)
-            self._stop_price_subscription(); self._disable_trail(); self.trail=AutoTrailEngine(self.provider,self._trail_event,self._trail_finished,self._trail_price); self.trail.enable(self.service.original,settings,live); self.trail_state.setText("● يعمل — السعر اللحظي مباشر"); self.trail_enable.setText("إيقاف التتبع"); self._on_price(live)
+            settings=AutoTrailSettings.parse(self.trigger_edit.text(),self.tp_move_edit.text(),self.sl_move_edit.text());live=self.provider.get_last_price(self.service.selection.symbol);self._stop_price_subscription();self._disable_trail();self.trail=AutoTrailEngine(self.provider,self._trail_event,self._trail_finished,self._price_bridge.push);self.trail.enable(self.service.original,settings,live);self.trail_state.setText("● يعمل — السعر اللحظي مباشر");self.trail_enable.setText("إيقاف التتبع");self._on_price(live)
         except Exception as exc:QMessageBox.warning(self,"التتبع",str(exc))
 
     def _disable_trail(self)->None:
         if self.trail:
             try:self.trail.close()
             except Exception:pass
-        self.trail=None; self.trail_state.setText("متوقف"); self.trail_enable.setText("تشغيل التتبع"); self.anchor_label.setText("مرجع: —    التالي: —    حي: —")
+        self.trail=None;self.trail_state.setText("متوقف");self.trail_enable.setText("تشغيل التتبع");self.anchor_label.setText("مرجع: —    التالي: —    حي: —")
 
     def _resubscribe_selected(self)->None:
         if not self.service.selection:return
-        self._stop_price_subscription(); self.unsubscribe=self.provider.subscribe_price(self.service.selection.symbol,self._price_bridge.push)
-
-    def _trail_price(self,price:Decimal)->None:
-        self._on_price(price)
+        self._stop_price_subscription();self.unsubscribe=self.provider.subscribe_price(self.service.selection.symbol,self._price_bridge.push)
 
     def _trail_event(self,kind:str,details:str)->None:self._worker_bridge.finished.emit(("event",kind,details))
     def _trail_finished(self,ok:bool,message:str,result:dict|None)->None:self._worker_bridge.finished.emit(("trail_done",ok,message,result))
@@ -258,11 +220,9 @@ class MainWindow(QMainWindow):
         if kind=="trail_done":
             _,ok,message,result=payload
             if ok:
-                self._log("نجاح",message); self._refresh_orders(False)
-                new_id=result.get("orderListId") if isinstance(result,dict) else None
+                self._log("نجاح",message);self._refresh_orders(False);new_id=result.get("orderListId") if isinstance(result,dict) else None
                 if new_id:
-                    try:
-                        draft=self.service.select(int(new_id)); self.tp_edit.setText(str(draft.values.get("abovePrice") or draft.values.get("leg1.price") or "")); self.sl_edit.setText(str(draft.values.get("belowStopPrice") or draft.values.get("leg2.stopPrice") or "")); self.qty_edit.setText(str(draft.values.get("quantity") or draft.values.get("leg1.quantity") or "")); self._tick_cache[draft.selection.symbol]=self.provider.get_tick_size(draft.selection.symbol)
+                    try:draft=self.service.select(int(new_id));self.tp_edit.setText(str(draft.values.get("abovePrice") or draft.values.get("leg1.price") or ""));self.sl_edit.setText(str(draft.values.get("belowStopPrice") or draft.values.get("leg2.stopPrice") or ""));self.qty_edit.setText(str(draft.values.get("quantity") or draft.values.get("leg1.quantity") or ""));self._tick_cache[draft.selection.symbol]=self.provider.get_tick_size(draft.selection.symbol)
                     except Exception:pass
             else:self.trail_state.setText("متوقف — يحتاج مراجعة");self._log("توقف",message);QMessageBox.critical(self,"التتبع توقف",message)
             return
@@ -308,7 +268,7 @@ class MainWindow(QMainWindow):
         if self.mode=="PAPER" and isinstance(self.provider,PaperOCOProvider):self.provider.fail_next_cancel=bool(state)
     def _reset_demo(self)->None:
         if self.mode!="PAPER":return
-        self.provider=self._new_paper_provider();self.service=OCOEditorService(self.provider);self._clear_selection_ui();self._refresh_orders(False);self._log("إعادة","تمت إعادة حالة المحاكي")
+        self.provider=self._new_paper_provider();self.service=OCOEditorService(self.provider);self._tick_cache.clear();self._clear_selection_ui();self._refresh_orders(False);self._log("إعادة","تمت إعادة حالة المحاكي")
 
     def _log(self,event:str,details:str)->None:
         r=self.event_log.rowCount();self.event_log.insertRow(r);self.event_log.setItem(r,0,QTableWidgetItem(event));self.event_log.setItem(r,1,QTableWidgetItem(details));self.event_log.scrollToBottom()
