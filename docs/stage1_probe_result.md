@@ -1,0 +1,1 @@
+Stage 1 probe showed REST responses arriving, while the WebSocket connection did not produce WS_TRADE prices during the observed run. The implementation must therefore make WebSocket connection failures/timeouts explicit before Stage 1 can be marked successful.
