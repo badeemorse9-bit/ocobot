@@ -93,7 +93,7 @@ class BinanceOCOProvider:
         raise ValueError(f"PRICE_FILTER/tickSize not found for {symbol}")
 
     def subscribe_price(self, symbol: str, callback: Callable[[Decimal], None]) -> Callable[[], None]:
-        """Subscribe to live Testnet prices using real-time trades plus ticker fallback."""
+        """Subscribe to live prices while keeping GUI callbacks bounded and reconnecting automatically."""
         stop = threading.Event()
         symbol_upper = symbol.upper()
         normalized = symbol_upper.lower()
@@ -111,8 +111,13 @@ class BinanceOCOProvider:
                     close_timeout=2,
                     max_queue=256,
                 ) as ws:
+                    last_emit = 0.0
+                    pending_price: Decimal | None = None
                     while not stop.is_set():
-                        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            continue
                         data = _json_loads(raw)
                         event = data.get("data", data)
                         if not isinstance(event, dict):
@@ -123,8 +128,20 @@ class BinanceOCOProvider:
                             price = Decimal(str(event["p"]))
                         elif event_type == "24hrTicker" and event.get("c") is not None:
                             price = Decimal(str(event["c"]))
-                        if price is not None and price > 0:
-                            callback(price)
+                        if price is None or price <= 0:
+                            continue
+
+                        pending_price = price
+                        now = time.monotonic()
+                        # Keep raw WebSocket input flowing internally, but coalesce GUI-facing
+                        # callbacks to 50 updates/second so a fast symbol cannot flood Qt events.
+                        if now - last_emit >= 0.020:
+                            callback(pending_price)
+                            pending_price = None
+                            last_emit = now
+
+                    if pending_price is not None and not stop.is_set():
+                        callback(pending_price)
 
             async def loop() -> None:
                 backoff = 0.25
@@ -132,15 +149,11 @@ class BinanceOCOProvider:
                     try:
                         await run_connection()
                         backoff = 0.25
-                    except asyncio.TimeoutError:
-                        # A timeout only causes reconnect through the outer loop.
-                        pass
                     except Exception:
-                        pass
-                    if stop.is_set():
-                        return
-                    stop.wait(backoff)
-                    backoff = min(backoff * 2, 5.0)
+                        if stop.is_set():
+                            return
+                        stop.wait(backoff)
+                        backoff = min(backoff * 2, 5.0)
 
             asyncio.run(loop())
 
