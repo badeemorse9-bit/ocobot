@@ -93,42 +93,54 @@ class BinanceOCOProvider:
         raise ValueError(f"PRICE_FILTER/tickSize not found for {symbol}")
 
     def subscribe_price(self, symbol: str, callback: Callable[[Decimal], None]) -> Callable[[], None]:
-        """Subscribe to raw trade prices with automatic reconnect until unsubscribed."""
+        """Subscribe to live Testnet prices using real-time trades plus ticker fallback."""
         stop = threading.Event()
         symbol_upper = symbol.upper()
-        symbol_stream = symbol_upper.lower() + "@trade"
+        normalized = symbol_upper.lower()
+        trade_stream = f"{normalized}@trade"
+        ticker_stream = f"{normalized}@ticker"
+        combined_base = self.ws_base.rsplit("/ws", 1)[0]
+        url = f"{combined_base}/stream?streams={trade_stream}/{ticker_stream}"
 
         def worker() -> None:
             async def run_connection() -> None:
-                url = f"{self.ws_base}/{symbol_stream}"
                 async with websockets.connect(
                     url,
-                    ping_interval=20,
-                    ping_timeout=20,
+                    ping_interval=15,
+                    ping_timeout=10,
                     close_timeout=2,
-                    max_queue=64,
+                    max_queue=256,
                 ) as ws:
                     while not stop.is_set():
-                        try:
-                            raw = await asyncio.wait_for(ws.recv(), timeout=30.0)
-                        except asyncio.TimeoutError:
-                            # The protocol ping/pong is handled by websockets; a timeout here
-                            # is used only to ensure the loop re-checks the stop flag.
-                            continue
+                        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
                         data = _json_loads(raw)
-                        if data.get("e") == "trade" and "p" in data:
-                            callback(Decimal(str(data["p"])))
+                        event = data.get("data", data)
+                        if not isinstance(event, dict):
+                            continue
+                        price: Decimal | None = None
+                        event_type = event.get("e")
+                        if event_type == "trade" and event.get("p") is not None:
+                            price = Decimal(str(event["p"]))
+                        elif event_type == "24hrTicker" and event.get("c") is not None:
+                            price = Decimal(str(event["c"]))
+                        if price is not None and price > 0:
+                            callback(price)
 
             async def loop() -> None:
+                backoff = 0.25
                 while not stop.is_set():
                     try:
                         await run_connection()
+                        backoff = 0.25
+                    except asyncio.TimeoutError:
+                        # A timeout only causes reconnect through the outer loop.
+                        pass
                     except Exception:
-                        if stop.wait(0.5):
-                            return
-                    else:
-                        if stop.wait(0.1):
-                            return
+                        pass
+                    if stop.is_set():
+                        return
+                    stop.wait(backoff)
+                    backoff = min(backoff * 2, 5.0)
 
             asyncio.run(loop())
 
