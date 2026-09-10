@@ -86,5 +86,5 @@ def test_select_rejects_non_oco_without_mutating_provider() -> None:
         [non_oco], {"TUTUSDT": Decimal("0.07500")}, {"TUTUSDT": Decimal("0.000001")}
     )
     service = OCOEditorService(provider)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="not active"):
+    with pytest.raises(ValueError, match="not an OCO"):
         service.select(2005)
