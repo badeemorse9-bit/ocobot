@@ -39,6 +39,8 @@ class OCOEditorService:
         order = self.provider.get_oco(order_list_id)
         if order is None:
             raise ValueError("Selected OCO was not found")
+        if order.contingency_type.upper() != "OCO":
+            raise ValueError("Selected order list is not an OCO")
         if order.status.value not in {"ACTIVE", "EXEC_STARTED"}:
             raise ValueError("Selected OCO is not active")
         self.original = order
@@ -160,6 +162,8 @@ class OCOEditorService:
         current = self.provider.get_oco(self.selection.order_list_id)
         if current is None:
             return False, "Selected OCO no longer exists", None
+        if current.contingency_type.upper() != "OCO":
+            return False, "Selected order list is no longer an OCO", current
         if current.status.value not in {"ACTIVE", "EXEC_STARTED"}:
             return False, "Selected OCO is no longer active", current
         if current.order_list_id != self.selection.order_list_id:
