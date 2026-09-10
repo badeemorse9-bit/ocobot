@@ -1,0 +1,1 @@
+Stage 1 diagnostic note: the Testnet market stream is documented at wss://stream.testnet.binance.vision/ws/<stream>. The live-price implementation also retries the explicit :9443 listener because Binance Testnet documentation uses that listener in websocket examples.
