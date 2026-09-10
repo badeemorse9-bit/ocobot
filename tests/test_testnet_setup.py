@@ -16,7 +16,7 @@ def test_executed_average_price_uses_weighted_fills() -> None:
         }
     )
     assert qty == Decimal("3")
-    assert avg == Decimal("16.666666666666666666666666666666666666")
+    assert avg == Decimal("50") / Decimal("3")
 
 
 def test_executed_average_price_rejects_zero_execution() -> None:
