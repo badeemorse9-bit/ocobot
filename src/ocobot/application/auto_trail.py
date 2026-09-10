@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from threading import Lock
@@ -20,11 +20,7 @@ class AutoTrailSettings:
     @classmethod
     def parse(cls, trigger: str, tp_move: str, sl_move: str) -> "AutoTrailSettings":
         values = []
-        for label, text in (
-            ("Trigger Rise", trigger),
-            ("TP Move", tp_move),
-            ("SL Move", sl_move),
-        ):
+        for label, text in (("Trigger Rise", trigger), ("TP Move", tp_move), ("SL Move", sl_move)):
             try:
                 value = Decimal(text.strip())
             except (InvalidOperation, ValueError) as exc:
@@ -63,11 +59,7 @@ class ReplacementPlan:
 
 
 class AutoTrailEngine:
-    """Thread-safe upward-only OCO replacement engine driven by live prices.
-
-    Price callbacks update only in-memory state. Exchange mutation is serialized
-    in one worker so a price jump cannot cause a chain of overlapping cancels.
-    """
+    """Upward-only OCO replacement engine driven by the main live price stream."""
 
     def __init__(
         self,
@@ -88,7 +80,6 @@ class AutoTrailEngine:
         self._settings: AutoTrailSettings | None = None
         self._busy = False
         self._last_error: str | None = None
-        self._unsubscribe: Callable[[], None] | None = None
 
     def close(self) -> None:
         self.disable()
@@ -99,7 +90,6 @@ class AutoTrailEngine:
             raise ValueError("Selected OCO is not active")
         if live_price <= 0:
             raise ValueError("Live price must be positive")
-        self.disable()
         with self._lock:
             self._enabled = True
             self._selection_id = order.order_list_id
@@ -107,13 +97,14 @@ class AutoTrailEngine:
             self._settings = settings
             self._anchor = live_price
             self._latest_price = live_price
+            self._busy = False
             self._last_error = None
-        self._unsubscribe = self.provider.subscribe_price(order.symbol, self.on_price)
         self._event("TRAIL", f"Enabled for OCO {order.order_list_id}; anchor {live_price}")
         return self.snapshot()
 
     def disable(self) -> TrailSnapshot:
         with self._lock:
+            old_id = self._selection_id
             self._enabled = False
             self._selection_id = None
             self._symbol = None
@@ -122,12 +113,21 @@ class AutoTrailEngine:
             self._settings = None
             self._busy = False
             self._last_error = None
-        if self._unsubscribe:
-            try:
-                self._unsubscribe()
-            except Exception:
-                pass
-            self._unsubscribe = None
+        if old_id is not None:
+            self._event("TRAIL", f"Disabled for OCO {old_id}")
+        return self.snapshot()
+
+    def update_selection(self, order: OCOOrder, live_price: Decimal) -> TrailSnapshot:
+        with self._lock:
+            active = self._enabled
+            old_id = self._selection_id
+        if active and old_id != order.order_list_id:
+            self.disable()
+        if active and old_id == order.order_list_id:
+            with self._lock:
+                self._symbol = order.symbol
+                self._latest_price = live_price
+            return self.snapshot()
         return self.snapshot()
 
     def snapshot(self) -> TrailSnapshot:
@@ -164,13 +164,7 @@ class AutoTrailEngine:
         self._event("TRIGGER", f"OCO {order_list_id}: live price {price} reached trigger {trigger}")
         self._executor.submit(self._replace_once, order_list_id, symbol, price, settings)
 
-    def _replace_once(
-        self,
-        order_list_id: int,
-        symbol: str | None,
-        trigger_price: Decimal,
-        settings: AutoTrailSettings,
-    ) -> None:
+    def _replace_once(self, order_list_id: int, symbol: str | None, trigger_price: Decimal, settings: AutoTrailSettings) -> None:
         result: dict[str, Any] | None = None
         try:
             if not symbol:
@@ -184,16 +178,15 @@ class AutoTrailEngine:
                 raise RuntimeError("Selected OCO identity changed; trail stopped")
 
             plan = self._build_plan(current, trigger_price, settings)
-            self._event(
-                "PREPARE",
-                f"OCO {order_list_id}: TP {plan.new_tp}, SL {plan.new_stop}, Stop-limit {plan.new_stop_limit}",
-            )
+            self._event("PREPARE", f"OCO {order_list_id}: TP {plan.new_tp}, SL {plan.new_stop}, Stop-limit {plan.new_stop_limit}")
 
-            current_before_cancel = self.provider.get_oco(order_list_id)
-            if current_before_cancel is None:
+            latest = self.provider.get_oco(order_list_id)
+            if latest is None:
                 raise RuntimeError("Selected OCO disappeared before cancellation")
-            if current_before_cancel.status.value not in {"ACTIVE", "EXEC_STARTED"}:
+            if latest.status.value not in {"ACTIVE", "EXEC_STARTED"}:
                 raise RuntimeError("Selected OCO completed before cancellation")
+            if latest.order_list_id != order_list_id:
+                raise RuntimeError("Selected OCO identity changed before cancellation")
 
             self.provider.cancel_oco(order_list_id)
             self._event("CANCEL", f"Old OCO {order_list_id} cancelled")
@@ -227,7 +220,6 @@ class AutoTrailEngine:
                 self._enabled = False
             self._event("FAILED_NEEDS_ATTENTION", str(exc))
             self._finished(False, str(exc), result)
-            return
 
     @staticmethod
     def _build_plan(order: OCOOrder, trigger_price: Decimal, settings: AutoTrailSettings) -> ReplacementPlan:
