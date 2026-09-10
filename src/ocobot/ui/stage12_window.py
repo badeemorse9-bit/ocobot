@@ -80,6 +80,9 @@ class Stage12Window(QMainWindow):
         self._populate_orders()
         if self.orders_table.rowCount():
             self.orders_table.selectRow(0)
+            # QTableWidget can defer selection notification until the event loop;
+            # explicitly apply the initial selection so tests and startup state agree.
+            self._select_row()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.feed is not None:
@@ -256,6 +259,7 @@ class Stage12Window(QMainWindow):
         self.count_label.setText(f"{len(ordered)} OCO")
         if ordered and self.orders_table.currentRow() < 0:
             self.orders_table.selectRow(0)
+            self._select_row()
 
     def _select_row(self) -> None:
         rows = self.orders_table.selectionModel().selectedRows()
