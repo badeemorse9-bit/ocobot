@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -59,17 +60,19 @@ class ReplacementPlan:
 
 
 class AutoTrailEngine:
-    """Upward-only OCO replacement engine driven by the main live price stream."""
+    """Upward-only OCO replacement engine driven by a live price stream."""
 
     def __init__(
         self,
         provider: OCOProvider,
         event: Callable[[str, str], None] | None = None,
         finished: Callable[[bool, str, dict[str, Any] | None], None] | None = None,
+        price: Callable[[Decimal], None] | None = None,
     ) -> None:
         self.provider = provider
         self._event = event or (lambda _kind, _details: None)
         self._finished = finished or (lambda _ok, _message, _result: None)
+        self._price = price or (lambda _price: None)
         self._lock = Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocobot-trail")
         self._enabled = False
@@ -80,6 +83,7 @@ class AutoTrailEngine:
         self._settings: AutoTrailSettings | None = None
         self._busy = False
         self._last_error: str | None = None
+        self._unsubscribe: Callable[[], None] | None = None
 
     def close(self) -> None:
         self.disable()
@@ -90,6 +94,7 @@ class AutoTrailEngine:
             raise ValueError("Selected OCO is not active")
         if live_price <= 0:
             raise ValueError("Live price must be positive")
+        self.disable()
         with self._lock:
             self._enabled = True
             self._selection_id = order.order_list_id
@@ -99,6 +104,7 @@ class AutoTrailEngine:
             self._latest_price = live_price
             self._busy = False
             self._last_error = None
+        self._unsubscribe = self.provider.subscribe_price(order.symbol, self.on_price)
         self._event("TRAIL", f"Enabled for OCO {order.order_list_id}; anchor {live_price}")
         return self.snapshot()
 
@@ -113,21 +119,12 @@ class AutoTrailEngine:
             self._settings = None
             self._busy = False
             self._last_error = None
+        if self._unsubscribe:
+            try: self._unsubscribe()
+            except Exception: pass
+            self._unsubscribe = None
         if old_id is not None:
             self._event("TRAIL", f"Disabled for OCO {old_id}")
-        return self.snapshot()
-
-    def update_selection(self, order: OCOOrder, live_price: Decimal) -> TrailSnapshot:
-        with self._lock:
-            active = self._enabled
-            old_id = self._selection_id
-        if active and old_id != order.order_list_id:
-            self.disable()
-        if active and old_id == order.order_list_id:
-            with self._lock:
-                self._symbol = order.symbol
-                self._latest_price = live_price
-            return self.snapshot()
         return self.snapshot()
 
     def snapshot(self) -> TrailSnapshot:
@@ -136,60 +133,64 @@ class AutoTrailEngine:
             next_trigger = None
             if self._anchor is not None and settings is not None:
                 next_trigger = self._anchor * (Decimal("1") + settings.trigger_rise_percent / Decimal("100"))
-            return TrailSnapshot(
-                enabled=self._enabled,
-                symbol=self._symbol,
-                order_list_id=self._selection_id,
-                latest_price=self._latest_price,
-                anchor_price=self._anchor,
-                next_trigger=next_trigger,
-                last_error=self._last_error,
-                busy=self._busy,
-            )
+            return TrailSnapshot(self._enabled, self._symbol, self._selection_id, self._latest_price, self._anchor, next_trigger, self._last_error, self._busy)
 
     def on_price(self, price: Decimal) -> None:
         if price <= 0:
             return
         with self._lock:
             self._latest_price = price
-            if not self._enabled or self._busy or self._anchor is None or self._settings is None or self._selection_id is None:
-                return
-            trigger = self._anchor * (Decimal("1") + self._settings.trigger_rise_percent / Decimal("100"))
-            if price < trigger:
+            enabled = self._enabled
+            busy = self._busy
+            anchor = self._anchor
+            settings = self._settings
+            selection_id = self._selection_id
+            symbol = self._symbol
+        self._price(price)
+        if not enabled or busy or anchor is None or settings is None or selection_id is None:
+            return
+        trigger = anchor * (Decimal("1") + settings.trigger_rise_percent / Decimal("100"))
+        if price < trigger:
+            return
+        with self._lock:
+            if not self._enabled or self._busy or self._selection_id != selection_id:
                 return
             self._busy = True
-            order_list_id = self._selection_id
-            settings = self._settings
-            symbol = self._symbol
-        self._event("TRIGGER", f"OCO {order_list_id}: live price {price} reached trigger {trigger}")
-        self._executor.submit(self._replace_once, order_list_id, symbol, price, settings)
+        self._event("TRIGGER", f"OCO {selection_id}: live price {price} reached trigger {trigger}")
+        self._executor.submit(self._replace_once, selection_id, symbol, price, settings)
 
     def _replace_once(self, order_list_id: int, symbol: str | None, trigger_price: Decimal, settings: AutoTrailSettings) -> None:
         result: dict[str, Any] | None = None
+        started = time.perf_counter()
         try:
             if not symbol:
                 raise RuntimeError("Trail symbol is missing")
             current = self.provider.get_oco(order_list_id)
-            if current is None:
-                raise RuntimeError("Selected OCO no longer exists; trail stopped")
-            if current.status.value not in {"ACTIVE", "EXEC_STARTED"}:
-                raise RuntimeError("Selected OCO is no longer active; trail stopped")
+            if current is None or current.status.value not in {"ACTIVE", "EXEC_STARTED"}:
+                raise RuntimeError("Selected OCO no longer exists or is no longer active; trail stopped")
             if current.order_list_id != order_list_id or current.symbol != symbol:
                 raise RuntimeError("Selected OCO identity changed; trail stopped")
 
             plan = self._build_plan(current, trigger_price, settings)
             self._event("PREPARE", f"OCO {order_list_id}: TP {plan.new_tp}, SL {plan.new_stop}, Stop-limit {plan.new_stop_limit}")
 
-            latest = self.provider.get_oco(order_list_id)
-            if latest is None:
-                raise RuntimeError("Selected OCO disappeared before cancellation")
-            if latest.status.value not in {"ACTIVE", "EXEC_STARTED"}:
-                raise RuntimeError("Selected OCO completed before cancellation")
-            if latest.order_list_id != order_list_id:
-                raise RuntimeError("Selected OCO identity changed before cancellation")
+            latest_price = self._latest_live_price(symbol)
+            ok, message = validate_sell_oco_relationship(latest_price, plan.new_tp, plan.new_stop)
+            if not ok:
+                raise RuntimeError(f"Latest price {latest_price} invalidates replacement: {message}")
+
+            before = self.provider.get_oco(order_list_id)
+            if before is None or before.status.value not in {"ACTIVE", "EXEC_STARTED"}:
+                raise RuntimeError("Selected OCO changed or completed before cancellation")
 
             self.provider.cancel_oco(order_list_id)
             self._event("CANCEL", f"Old OCO {order_list_id} cancelled")
+
+            newest_price = self._latest_live_price(symbol)
+            ok, message = validate_sell_oco_relationship(newest_price, plan.new_tp, plan.new_stop)
+            if not ok:
+                raise RuntimeError(f"Price moved to {newest_price} during replacement: {message}")
+
             result = self.provider.place_oco({
                 "symbol": plan.symbol,
                 "side": "SELL",
@@ -205,21 +206,37 @@ class AutoTrailEngine:
             new_id = result.get("orderListId")
             if not new_id:
                 raise RuntimeError("Replacement OCO was created without orderListId")
-
+            elapsed_ms = (time.perf_counter() - started) * 1000
             with self._lock:
                 self._selection_id = int(new_id)
-                self._anchor = self._latest_price or trigger_price
+                self._anchor = self._latest_price or newest_price or trigger_price
                 self._busy = False
                 self._last_error = None
-            self._event("SUCCESS", f"Replacement OCO {new_id} created; new anchor {self._anchor}")
+            self._event("SUCCESS", f"Replacement OCO {new_id} created in {elapsed_ms:.2f} ms; new anchor {self._anchor}")
             self._finished(True, f"Replacement OCO {new_id} created", result)
         except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000
             with self._lock:
                 self._busy = False
                 self._last_error = str(exc)
                 self._enabled = False
-            self._event("FAILED_NEEDS_ATTENTION", str(exc))
+            self._event("FAILED_NEEDS_ATTENTION", f"{exc} (after {elapsed_ms:.2f} ms)")
             self._finished(False, str(exc), result)
+
+    def _latest_live_price(self, symbol: str) -> Decimal:
+        try:
+            price = self.provider.get_last_price(symbol)
+        except Exception:
+            with self._lock:
+                cached = self._latest_price if self._symbol == symbol else None
+            if cached is None:
+                raise
+            return cached
+        with self._lock:
+            if self._symbol == symbol:
+                self._latest_price = price
+        self._price(price)
+        return price
 
     @staticmethod
     def _build_plan(order: OCOOrder, trigger_price: Decimal, settings: AutoTrailSettings) -> ReplacementPlan:
@@ -241,17 +258,4 @@ class AutoTrailEngine:
             raise ValueError(f"Auto Trail replacement invalid: {message}")
         if new_stop_limit > new_stop:
             raise ValueError("Auto Trail replacement has stop-limit above stop trigger")
-
-        return ReplacementPlan(
-            old_order_list_id=order.order_list_id,
-            symbol=order.symbol,
-            trigger_price=trigger_price,
-            new_tp=new_tp,
-            new_stop=new_stop,
-            new_stop_limit=new_stop_limit,
-            quantity=upper.quantity,
-            above_type=upper.order_type,
-            below_type=lower.order_type,
-            above_time_in_force=upper.time_in_force,
-            below_time_in_force=lower.time_in_force,
-        )
+        return ReplacementPlan(order.order_list_id, order.symbol, trigger_price, new_tp, new_stop, new_stop_limit, upper.quantity, upper.order_type, lower.order_type, upper.time_in_force, lower.time_in_force)
