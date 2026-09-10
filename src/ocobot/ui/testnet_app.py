@@ -3,9 +3,10 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QCheckBox, QGroupBox, QGridLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
+from ocobot.application.auto_trail import AutoTrailEngine, AutoTrailSettings
 from ocobot.domain.validation import highest_sell_stop_candidate
 from ocobot.providers.binance import BinanceOCOProvider
 from ocobot.ui.main_window import MainWindow
@@ -38,6 +39,179 @@ def executed_average_price(response: dict[str, Any]) -> tuple[Decimal, Decimal]:
     return executed_qty, price
 
 
+class TrailBridge(QObject):
+    event = Signal(str, str)
+    finished = Signal(bool, str, object)
+
+
+class AutoTrailPanel(QGroupBox):
+    """General trail settings outside the selected OCO; driven by the main live trade stream."""
+
+    def __init__(self, host: MainWindow) -> None:
+        super().__init__("AUTO TRAIL UP — global settings")
+        self.host = host
+        self.bridge = TrailBridge()
+        self.engine = AutoTrailEngine(
+            host.provider,
+            event=self.bridge.event.emit,
+            finished=self.bridge.finished.emit,
+        )
+        self._build()
+        self.host._price_bridge.price.connect(self._on_live_price)
+        self.host.orders.itemSelectionChanged.connect(self._selection_changed)
+        self.bridge.event.connect(self._handle_event)
+        self.bridge.finished.connect(self._handle_finished)
+        self._selection_changed()
+
+    def _build(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 5, 8, 5)
+        root.setSpacing(4)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
+
+        self.trigger_edit = QLineEdit("1")
+        self.tp_move_edit = QLineEdit("1")
+        self.sl_move_edit = QLineEdit("0.5")
+        self.enable_check = QCheckBox("ENABLE")
+        self.enable_check.toggled.connect(self._toggle)
+        self.stop_button = QPushButton("STOP TRAIL")
+        self.stop_button.clicked.connect(self._stop)
+        self.stop_button.setEnabled(False)
+
+        grid.addWidget(QLabel("Trigger rise %"), 0, 0)
+        grid.addWidget(self.trigger_edit, 0, 1)
+        grid.addWidget(QLabel("TP move %"), 0, 2)
+        grid.addWidget(self.tp_move_edit, 0, 3)
+        grid.addWidget(QLabel("SL move %"), 0, 4)
+        grid.addWidget(self.sl_move_edit, 0, 5)
+        grid.addWidget(self.enable_check, 0, 6)
+        grid.addWidget(self.stop_button, 0, 7)
+
+        self.anchor_label = QLabel("Anchor —")
+        self.trigger_label = QLabel("Next trigger —")
+        self.live_label = QLabel("Live —")
+        self.order_label = QLabel("OCO —")
+        self.status_label = QLabel("Waiting for one selected active OCO")
+        self.status_label.setStyleSheet("font-weight:700;")
+        status = QHBoxLayout()
+        status.setSpacing(10)
+        for widget in (self.anchor_label, self.trigger_label, self.live_label, self.order_label):
+            status.addWidget(widget)
+        status.addStretch(1)
+        grid.addLayout(status, 1, 0, 1, 8)
+        root.addLayout(grid)
+        root.addWidget(self.status_label)
+        self.setMaximumHeight(95)
+
+    def _parse_settings(self) -> AutoTrailSettings:
+        return AutoTrailSettings.parse(
+            self.trigger_edit.text(),
+            self.tp_move_edit.text(),
+            self.sl_move_edit.text(),
+        )
+
+    def _selected_id(self) -> int | None:
+        if self.host.service.selection is None:
+            return None
+        return self.host.service.selection.order_list_id
+
+    def _toggle(self, checked: bool) -> None:
+        if not checked:
+            self._stop()
+            return
+        try:
+            if self.host.mode not in {"PAPER", "TESTNET"}:
+                raise ValueError("Auto Trail is unavailable in LIVE mode")
+            selected_id = self._selected_id()
+            if selected_id is None:
+                raise ValueError("Select an active OCO first")
+            settings = self._parse_settings()
+            order = self.host.provider.get_oco(selected_id)
+            if order is None:
+                raise ValueError("Selected OCO no longer exists")
+            live = self.host.provider.get_last_price(order.symbol)
+            self.engine.provider = self.host.provider
+            snapshot = self.engine.enable(order, settings, live)
+            self.stop_button.setEnabled(True)
+            self.host.activate_btn.setEnabled(False)
+            self.status_label.setText("● TRAILING ACTIVE — listening to every live price update")
+            self._render(snapshot)
+        except Exception as exc:
+            self.enable_check.blockSignals(True)
+            self.enable_check.setChecked(False)
+            self.enable_check.blockSignals(False)
+            QMessageBox.warning(self, "AUTO TRAIL UP", str(exc))
+
+    def _stop(self) -> None:
+        self.engine.disable()
+        self.stop_button.setEnabled(False)
+        self.enable_check.blockSignals(True)
+        self.enable_check.setChecked(False)
+        self.enable_check.blockSignals(False)
+        self.host.activate_btn.setEnabled(self._selected_id() is not None and self.host.mode in {"PAPER", "TESTNET"})
+        self.status_label.setText("Auto Trail stopped — current OCO remains untouched")
+        self._render(self.engine.snapshot())
+
+    def _selection_changed(self) -> None:
+        selected_id = self._selected_id()
+        snap = self.engine.snapshot()
+        if snap.enabled and selected_id != snap.order_list_id:
+            self._stop()
+            return
+        self.order_label.setText(f"OCO {selected_id}" if selected_id is not None else "OCO —")
+
+    def _on_live_price(self, price: Decimal) -> None:
+        self.live_label.setText(f"Live {price:f}")
+        self.engine.on_price(price)
+        self._render(self.engine.snapshot())
+
+    def _render(self, snapshot) -> None:
+        self.anchor_label.setText(f"Anchor {snapshot.anchor_price:f}" if snapshot.anchor_price is not None else "Anchor —")
+        self.trigger_label.setText(f"Next {snapshot.next_trigger:f}" if snapshot.next_trigger is not None else "Next —")
+        if snapshot.latest_price is not None:
+            self.live_label.setText(f"Live {snapshot.latest_price:f}")
+        self.order_label.setText(f"OCO {snapshot.order_list_id}" if snapshot.order_list_id is not None else "OCO —")
+        if snapshot.busy and snapshot.enabled:
+            self.status_label.setText("● TRAILING ACTIVE — replacement in progress")
+        elif snapshot.enabled:
+            self.status_label.setText("● TRAILING ACTIVE — listening to live price")
+        elif snapshot.last_error:
+            self.status_label.setText(f"FAILED_NEEDS_ATTENTION — {snapshot.last_error}")
+
+    def _handle_event(self, kind: str, details: str) -> None:
+        self.host._log(kind, details)
+        self._render(self.engine.snapshot())
+
+    def _handle_finished(self, ok: bool, message: str, result: object) -> None:
+        if ok:
+            new_id = result.get("orderListId") if isinstance(result, dict) else None
+            if new_id:
+                self.host._refresh_orders(preserve_selection=False)
+                QTimer.singleShot(0, lambda: self._select_order_row(int(new_id)))
+            self.stop_button.setEnabled(True)
+            self.status_label.setText(message)
+        else:
+            self.enable_check.blockSignals(True)
+            self.enable_check.setChecked(False)
+            self.enable_check.blockSignals(False)
+            self.stop_button.setEnabled(False)
+            self.host.activate_btn.setEnabled(self._selected_id() is not None and self.host.mode in {"PAPER", "TESTNET"})
+            self.status_label.setText(f"FAILED_NEEDS_ATTENTION — {message}")
+        self._render(self.engine.snapshot())
+
+    def _select_order_row(self, order_list_id: int) -> None:
+        for row in range(self.host.orders.rowCount()):
+            item = self.host.orders.item(row, 0)
+            if item and item.text() == str(order_list_id):
+                self.host.orders.selectRow(row)
+                return
+
+    def close(self) -> None:
+        self.engine.close()
+
+
 class TestnetTradeSetup(QGroupBox):
     """Compact TESTNET-only account-preparation utility; separate from V1."""
 
@@ -57,7 +231,6 @@ class TestnetTradeSetup(QGroupBox):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 5, 8, 5)
         root.setSpacing(4)
-
         note = QLabel("Prepare a Testnet asset, then create one SELL OCO from the filled quantity.")
         note.setStyleSheet("color:#5f6b76;")
         root.addWidget(note)
@@ -246,8 +419,22 @@ class TestnetMainWindow(MainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.testnet_setup = TestnetTradeSetup(self)
+        self.auto_trail = AutoTrailPanel(self)
         root = self.centralWidget().widget().layout()
-        root.insertWidget(1, self.testnet_setup)
+        root.insertWidget(1, self.auto_trail)
+        root.insertWidget(2, self.testnet_setup)
+
+    def _switch_mode(self, mode: str) -> None:
+        if hasattr(self, "auto_trail"):
+            self.auto_trail.close()
+        super()._switch_mode(mode)
+        if hasattr(self, "auto_trail"):
+            self.auto_trail.engine.provider = self.provider
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if hasattr(self, "auto_trail"):
+            self.auto_trail.close()
+        super().closeEvent(event)
 
 
 def run_app() -> None:
