@@ -22,12 +22,7 @@ LIVE_WS = "wss://stream.binance.com:9443/ws"
 
 
 class BinanceOCOProvider:
-    """Binance Spot REST/WebSocket adapter.
-
-    Testnet is the only enabled trading mode in this milestone. LIVE is kept
-    structurally available but blocked until explicit production enablement.
-    API credentials are read only from constructor arguments or environment.
-    """
+    """Binance Spot REST/WebSocket adapter."""
 
     def __init__(self, mode: str = "TESTNET", api_key: str | None = None, api_secret: str | None = None, timeout: float = 5.0) -> None:
         if mode not in {"TESTNET", "LIVE"}:
@@ -55,6 +50,10 @@ class BinanceOCOProvider:
     def close(self) -> None:
         for _, stop in self._subscriptions:
             stop.set()
+        for thread, _ in self._subscriptions:
+            if thread.is_alive():
+                thread.join(timeout=0.2)
+        self._subscriptions.clear()
         self._http.close()
 
     def list_open_ocos(self) -> list[OCOOrder]:
@@ -73,10 +72,11 @@ class BinanceOCOProvider:
         return self._load_order_list(row)
 
     def get_last_price(self, symbol: str) -> Decimal:
-        response = self._public_request("GET", "/api/v3/ticker/price", {"symbol": symbol})
+        response = self._public_request("GET", "/api/v3/ticker/price", {"symbol": symbol.upper()})
         return Decimal(str(response["price"]))
 
     def get_tick_size(self, symbol: str) -> Decimal:
+        symbol = symbol.upper()
         cached = self._filter_cache.get(symbol)
         now = time.monotonic()
         if cached and now - cached[0] < 300:
@@ -93,27 +93,46 @@ class BinanceOCOProvider:
         raise ValueError(f"PRICE_FILTER/tickSize not found for {symbol}")
 
     def subscribe_price(self, symbol: str, callback: Callable[[Decimal], None]) -> Callable[[], None]:
+        """Subscribe to raw trade prices with automatic reconnect until unsubscribed."""
         stop = threading.Event()
-        symbol_stream = symbol.lower() + "@trade"
+        symbol_upper = symbol.upper()
+        symbol_stream = symbol_upper.lower() + "@trade"
 
         def worker() -> None:
-            async def run() -> None:
-                try:
-                    async with websockets.connect(f"{self.ws_base}/{symbol_stream}", ping_interval=20, ping_timeout=20) as ws:
-                        while not stop.is_set():
-                            try:
-                                raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                            except asyncio.TimeoutError:
-                                continue
-                            data = _json_loads(raw)
-                            if "p" in data:
-                                callback(Decimal(str(data["p"])))
-                except Exception:
-                    return
+            async def run_connection() -> None:
+                url = f"{self.ws_base}/{symbol_stream}"
+                async with websockets.connect(
+                    url,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=2,
+                    max_queue=64,
+                ) as ws:
+                    while not stop.is_set():
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                        except asyncio.TimeoutError:
+                            # The protocol ping/pong is handled by websockets; a timeout here
+                            # is used only to ensure the loop re-checks the stop flag.
+                            continue
+                        data = _json_loads(raw)
+                        if data.get("e") == "trade" and "p" in data:
+                            callback(Decimal(str(data["p"])))
 
-            asyncio.run(run())
+            async def loop() -> None:
+                while not stop.is_set():
+                    try:
+                        await run_connection()
+                    except Exception:
+                        if stop.wait(0.5):
+                            return
+                    else:
+                        if stop.wait(0.1):
+                            return
 
-        thread = threading.Thread(target=worker, name=f"ocobot-price-{symbol}", daemon=True)
+            asyncio.run(loop())
+
+        thread = threading.Thread(target=worker, name=f"ocobot-price-{symbol_upper}", daemon=True)
         thread.start()
         self._subscriptions.append((thread, stop))
 
@@ -123,7 +142,6 @@ class BinanceOCOProvider:
         return unsubscribe
 
     def place_market_buy(self, symbol: str, quote_order_qty: Decimal) -> dict[str, Any]:
-        """Testnet-only setup helper; never available in LIVE mode."""
         if self.mode != "TESTNET":
             raise RuntimeError("Market-buy setup is TESTNET-only")
         if quote_order_qty <= 0:
@@ -141,8 +159,6 @@ class BinanceOCOProvider:
         )
 
     def cancel_oco(self, order_list_id: int) -> dict[str, Any]:
-        if not self.api_key or not self.api_secret:
-            raise RuntimeError("Binance credentials are not configured")
         existing = self.get_oco(order_list_id)
         if existing is None:
             raise RuntimeError("Selected OCO no longer exists")
@@ -157,28 +173,43 @@ class BinanceOCOProvider:
         above_type = str(payload.get("aboveType", "LIMIT_MAKER"))
         below_type = str(payload.get("belowType", "STOP_LOSS_LIMIT"))
         params: dict[str, Any] = {"symbol": symbol, "side": side, "quantity": quantity, "aboveType": above_type, "belowType": below_type, "newOrderRespType": "RESULT"}
-        if payload.get("abovePrice") is not None:
-            params["abovePrice"] = str(payload["abovePrice"])
-        if payload.get("aboveStopPrice") is not None:
-            params["aboveStopPrice"] = str(payload["aboveStopPrice"])
-        if payload.get("aboveTimeInForce") is not None:
-            params["aboveTimeInForce"] = str(payload["aboveTimeInForce"])
-        if payload.get("belowPrice") is not None:
-            params["belowPrice"] = str(payload["belowPrice"])
-        if payload.get("belowStopPrice") is not None:
-            params["belowStopPrice"] = str(payload["belowStopPrice"])
-        if payload.get("belowTimeInForce") is not None:
-            params["belowTimeInForce"] = str(payload["belowTimeInForce"])
+        for key in ("abovePrice", "aboveStopPrice", "aboveTimeInForce", "belowPrice", "belowStopPrice", "belowTimeInForce"):
+            if payload.get(key) is not None:
+                params[key] = str(payload[key])
         return self._signed_request("POST", "/api/v3/orderList/oco", params)
 
     def _load_order_list(self, row: dict[str, Any]) -> OCOOrder:
         legs: list[OrderLeg] = []
         for ref in row.get("orders", []):
             detail = self._signed_request("GET", "/api/v3/order", {"symbol": row["symbol"], "orderId": ref["orderId"]})
-            legs.append(OrderLeg(symbol=str(detail["symbol"]), order_id=int(detail["orderId"]), client_order_id=str(detail["clientOrderId"]), side=str(detail["side"]), order_type=str(detail["type"]), status=str(detail["status"]), quantity=Decimal(str(detail.get("origQty", "0"))), price=Decimal(str(detail["price"])) if detail.get("price") not in {None, "", "0", "0.00000000"} else None, stop_price=Decimal(str(detail["stopPrice"])) if detail.get("stopPrice") not in {None, "", "0", "0.00000000"} else None, time_in_force=detail.get("timeInForce"), raw=detail))
-        return OCOOrder(order_list_id=int(row["orderListId"]), symbol=str(row["symbol"]), contingency_type=str(row.get("contingencyType", "OCO")), list_status_type=str(row.get("listStatusType", "UNKNOWN")), list_order_status=str(row.get("listOrderStatus", "UNKNOWN")), list_client_order_id=str(row.get("listClientOrderId", "")), transaction_time=int(row.get("transactionTime", 0)), legs=tuple(legs), raw=row)
+            legs.append(
+                OrderLeg(
+                    symbol=str(detail["symbol"]),
+                    order_id=int(detail["orderId"]),
+                    client_order_id=str(detail["clientOrderId"]),
+                    side=str(detail["side"]),
+                    order_type=str(detail["type"]),
+                    status=str(detail["status"]),
+                    quantity=Decimal(str(detail.get("origQty", "0"))),
+                    price=Decimal(str(detail["price"])) if detail.get("price") not in {None, "", "0", "0.00000000"} else None,
+                    stop_price=Decimal(str(detail["stopPrice"])) if detail.get("stopPrice") not in {None, "", "0", "0.00000000"} else None,
+                    time_in_force=detail.get("timeInForce"),
+                    raw=detail,
+                )
+            )
+        return OCOOrder(
+            order_list_id=int(row["orderListId"]),
+            symbol=str(row["symbol"]),
+            contingency_type=str(row.get("contingencyType", "OCO")),
+            list_status_type=str(row.get("listStatusType", "UNKNOWN")),
+            list_order_status=str(row.get("listOrderStatus", "UNKNOWN")),
+            list_client_order_id=str(row.get("listClientOrderId", "")),
+            transaction_time=int(row.get("transactionTime", 0)),
+            legs=tuple(legs),
+            raw=row,
+        )
 
-    def _public_request(self, method: str, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _public_request(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
         response = self._http.request(method, self.rest_base + path, params=params)
         return _decode_response(response)
 
