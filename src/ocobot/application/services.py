@@ -31,7 +31,9 @@ class OCOEditorService:
         self.max_stop_dynamic = False
 
     def refresh_open_orders(self) -> list[OCOOrder]:
-        return self.provider.list_open_ocos()
+        """Return only active OCOs supplied by the provider, preserving exchange IDs."""
+        orders = self.provider.list_open_ocos()
+        return sorted(orders, key=lambda order: (order.symbol, order.order_list_id))
 
     def select(self, order_list_id: int) -> OCODraft:
         order = self.provider.get_oco(order_list_id)
@@ -49,8 +51,10 @@ class OCOEditorService:
 
     @staticmethod
     def _draft_values(order: OCOOrder) -> dict[str, Any]:
+        """Hydrate editable fields from Binance-returned order-leg data, not array position."""
         values: dict[str, Any] = {"orderListId": order.order_list_id, "symbol": order.symbol}
         values.update(order.raw)
+
         for index, leg in enumerate(order.legs, start=1):
             values[f"leg{index}.orderId"] = leg.order_id
             values[f"leg{index}.type"] = leg.order_type
@@ -60,6 +64,19 @@ class OCOEditorService:
             values[f"leg{index}.price"] = str(leg.price) if leg.price is not None else ""
             values[f"leg{index}.stopPrice"] = str(leg.stop_price) if leg.stop_price is not None else ""
             values[f"leg{index}.timeInForce"] = leg.time_in_force or ""
+
+        tp = order.take_profit_leg
+        sl = order.stop_loss_leg
+        values["quantity"] = str(tp.quantity)
+        values["side"] = tp.side
+        values["abovePrice"] = str(tp.price) if tp.price is not None else ""
+        values["aboveType"] = tp.order_type
+        values["aboveTimeInForce"] = tp.time_in_force or ""
+        values["belowStopPrice"] = str(sl.stop_price) if sl.stop_price is not None else ""
+        values["belowPrice"] = str(sl.price) if sl.price is not None else ""
+        values["belowType"] = sl.order_type
+        values["belowTimeInForce"] = sl.time_in_force or ""
+        values["selectedOrderIds"] = tuple(leg.order_id for leg in order.legs)
         return values
 
     def set_draft_field(self, key: str, value: Any) -> None:
@@ -203,8 +220,8 @@ class OCOEditorService:
             "abovePrice": str(upper),
             "belowPrice": str(lower),
             "belowStopPrice": str(stop),
-            "aboveType": values.get("leg1.type", "LIMIT_MAKER"),
-            "belowType": values.get("leg2.type", "STOP_LOSS_LIMIT"),
-            "aboveTimeInForce": values.get("leg1.timeInForce") or None,
-            "belowTimeInForce": values.get("leg2.timeInForce") or None,
+            "aboveType": values.get("aboveType", values.get("leg1.type", "LIMIT_MAKER")),
+            "belowType": values.get("belowType", values.get("leg2.type", "STOP_LOSS_LIMIT")),
+            "aboveTimeInForce": values.get("aboveTimeInForce") or values.get("leg1.timeInForce") or None,
+            "belowTimeInForce": values.get("belowTimeInForce") or values.get("leg2.timeInForce") or None,
         }
