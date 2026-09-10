@@ -1,0 +1,1 @@
+Stage 1 status: the REST fallback is delivering Testnet prices, but the observed probe did not receive any WS_TRADE events. Do not mark Stage 1 successful until WebSocket price updates are observed.
