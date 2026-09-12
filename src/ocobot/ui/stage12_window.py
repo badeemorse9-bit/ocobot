@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+
 from datetime import datetime
 from decimal import Decimal
 
@@ -280,8 +281,8 @@ class Stage12Window(QMainWindow):
         header.addWidget(self.count_label)
         left.addLayout(header)
 
-        self.orders_table = QTableWidget(0, 7)
-        self.orders_table.setHorizontalHeaderLabels(["#", "orderListId", "Symbol", "Status", "Qty", "TP Price", "SL Stop Price"])
+        self.orders_table = QTableWidget(0, 8)
+        self.orders_table.setHorizontalHeaderLabels(["#", "orderListId", "Symbol", "Status", "Qty", "TP Sale Price", "SL Trigger", "SL Limit Price"])
         self.orders_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.orders_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.orders_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -318,8 +319,8 @@ class Stage12Window(QMainWindow):
 
         self._leg_row = QHBoxLayout()
         self._leg_row.setSpacing(9)
-        tp_frame = self._new_leg_frame("TP", "Take Profit (Limit Maker)", "green")
-        sl_frame = self._new_leg_frame("SL", "Stop Loss (Stop Loss Limit)", "red")
+        tp_frame = self._new_leg_frame("TP", "Take Profit — Sale Price (Limit Maker)", "green")
+        sl_frame = self._new_leg_frame("SL", "Stop Loss — Trigger + Limit After Trigger", "red")
         self._leg_row.addWidget(tp_frame, 1)
         self._leg_row.addWidget(sl_frame, 1)
         right.addLayout(self._leg_row)
@@ -401,7 +402,17 @@ class Stage12Window(QMainWindow):
         for idx, order in enumerate(ordered, start=1):
             row = self.orders_table.rowCount()
             self.orders_table.insertRow(row)
-            values = [str(idx), str(order.order_list_id), order.symbol, order.list_order_status, self._quantity(order), self._fmt(self._tp(order)), self._fmt(self._sl(order))]
+            sl_leg = self._sl_leg(order)
+            values = [
+                str(idx),
+                str(order.order_list_id),
+                order.symbol,
+                order.list_order_status,
+                self._quantity(order),
+                self._fmt(self._tp(order)),
+                self._fmt(sl_leg.stop_price if sl_leg else None),
+                self._fmt(sl_leg.price if sl_leg else None),
+            ]
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -443,9 +454,14 @@ class Stage12Window(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        rows = [("Order ID", str(leg.order_id)), ("Type", leg.order_type), ("Price", Stage12Window._fmt(leg.price))]
-        if leg.stop_price is not None:
-            rows.append(("Stop Price", Stage12Window._fmt(leg.stop_price)))
+        rows = [("Order ID", str(leg.order_id)), ("Type", leg.order_type)]
+        if kind == "green":
+            rows.append(("Sale Price", Stage12Window._fmt(leg.price)))
+        else:
+            rows.extend([
+                ("Trigger Stop Price", Stage12Window._fmt(leg.stop_price)),
+                ("Limit Price After Trigger", Stage12Window._fmt(leg.price)),
+            ])
         rows.extend([("Quantity", str(leg.quantity)), ("Time In Force", leg.time_in_force or "GTC")])
         for label, value in rows:
             row = QHBoxLayout()
@@ -503,11 +519,6 @@ class Stage12Window(QMainWindow):
     def _tp(order: OCOOrder) -> Decimal | None:
         leg = Stage12Window._tp_leg(order)
         return leg.price if leg else None
-
-    @staticmethod
-    def _sl(order: OCOOrder) -> Decimal | None:
-        leg = Stage12Window._sl_leg(order)
-        return leg.stop_price if leg else None
 
     @staticmethod
     def _fmt(value: Decimal | None) -> str:
