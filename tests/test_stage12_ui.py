@@ -8,6 +8,7 @@ def test_stage12_window_builds_read_only_oco_section() -> None:
     window = Stage12Window()
     assert window.orders_table.columnCount() == 6
     assert window.orders_table.rowCount() == 4
+    app.processEvents()
     assert window.selected is not None
     assert window.selected.order_list_id == 1003
     assert window.detail_id.text() == "1003"
