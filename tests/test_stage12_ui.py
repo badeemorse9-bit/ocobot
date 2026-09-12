@@ -27,5 +27,13 @@ def test_stage12_window_builds_approved_read_only_oco_screen() -> None:
     assert window.detail_status.text() == "EXECUTING"
     assert window.selected_pill.text() == "orderListId: 7964"
     assert window.feed is not None
+
+    # The three OCO prices must remain explicitly distinguishable.
+    tp_texts = [w.text() for w in window._leg_row.itemAt(0).widget().findChildren(type(window.detail_symbol))]
+    sl_texts = [w.text() for w in window._leg_row.itemAt(1).widget().findChildren(type(window.detail_symbol))]
+    assert any("Sale Price / سعر البيع" in text for text in tp_texts)
+    assert any("Trigger Stop Price / سعر تفعيل الاستوب" in text for text in sl_texts)
+    assert any("Limit Price After Trigger / سعر الحد بعد التفعيل" in text for text in sl_texts)
+
     window.close()
     app.processEvents()
