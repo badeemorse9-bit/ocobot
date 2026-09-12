@@ -282,12 +282,26 @@ class Stage12Window(QMainWindow):
         left.addLayout(header)
 
         self.orders_table = QTableWidget(0, 8)
-        self.orders_table.setHorizontalHeaderLabels(["#", "orderListId", "Symbol", "Status", "Qty", "TP Sale Price", "SL Trigger", "SL Limit Price"])
+        self.orders_table.setHorizontalHeaderLabels(["#", "orderListId", "Symbol", "Status", "Qty", "Sale Price (TP)", "Stop Trigger", "Limit After Trigger"])
         self.orders_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.orders_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.orders_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.orders_table.verticalHeader().setVisible(False)
-        self.orders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header_view = self.orders_table.horizontalHeader()
+        for column in range(8):
+            header_view.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        for column, width in {
+            0: 42,
+            1: 92,
+            2: 88,
+            3: 110,
+            4: 82,
+            5: 128,
+            6: 118,
+            7: 148,
+        }.items():
+            self.orders_table.setColumnWidth(column, width)
+        self.orders_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.orders_table.itemSelectionChanged.connect(self._select_row)
         left.addWidget(self.orders_table, 1)
         body.addWidget(left_card, 3)
@@ -319,7 +333,7 @@ class Stage12Window(QMainWindow):
 
         self._leg_row = QHBoxLayout()
         self._leg_row.setSpacing(9)
-        tp_frame = self._new_leg_frame("TP", "Take Profit — Sale Price (Limit Maker)", "green")
+        tp_frame = self._new_leg_frame("TP", "Take Profit — Sale Price (سعر البيع)", "green")
         sl_frame = self._new_leg_frame("SL", "Stop Loss — Trigger + Limit After Trigger", "red")
         self._leg_row.addWidget(tp_frame, 1)
         self._leg_row.addWidget(sl_frame, 1)
@@ -456,11 +470,11 @@ class Stage12Window(QMainWindow):
                 widget.deleteLater()
         rows = [("Order ID", str(leg.order_id)), ("Type", leg.order_type)]
         if kind == "green":
-            rows.append(("Sale Price", Stage12Window._fmt(leg.price)))
+            rows.append(("Sale Price / سعر البيع", Stage12Window._fmt(leg.price)))
         else:
             rows.extend([
-                ("Trigger Stop Price", Stage12Window._fmt(leg.stop_price)),
-                ("Limit Price After Trigger", Stage12Window._fmt(leg.price)),
+                ("Trigger Stop Price / سعر تفعيل الاستوب", Stage12Window._fmt(leg.stop_price)),
+                ("Limit Price After Trigger / سعر الحد بعد التفعيل", Stage12Window._fmt(leg.price)),
             ])
         rows.extend([("Quantity", str(leg.quantity)), ("Time In Force", leg.time_in_force or "GTC")])
         for label, value in rows:
