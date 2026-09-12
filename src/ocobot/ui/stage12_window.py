@@ -5,7 +5,6 @@ from datetime import datetime
 from decimal import Decimal
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -26,7 +25,6 @@ from ocobot.domain.models import OCOOrder, OrderLeg
 from ocobot.providers.binance import TESTNET_REST, TESTNET_WS
 
 
-# Approved Stage 2 palette — keep these values stable for the final UI.
 BG = "#031021"
 SIDEBAR = "#020d1c"
 CARD = "#061529"
@@ -40,7 +38,6 @@ TEAL = "#073b42"
 GREEN = "#19c58b"
 RED = "#ff4b68"
 AMBER = "#f08f1b"
-CYAN = "#4ea8ff"
 
 STYLE = f"""
 QMainWindow, QWidget {{ background:{BG}; color:{TEXT_SOFT}; font-family:'Segoe UI'; }}
@@ -48,18 +45,15 @@ QFrame#sidebar {{ background:{SIDEBAR}; border:0; }}
 QLabel#brand {{ color:#f3f8fb; font-size:25px; font-weight:800; }}
 QLabel#brandAccent {{ color:#ffc400; font-size:25px; font-weight:900; }}
 QLabel#sidehint {{ color:{MUTED}; font-size:11px; }}
-QLabel#sideSection {{ color:#8da8bd; font-size:10px; font-weight:800; letter-spacing:1px; padding-top:8px; }}
 QPushButton#nav {{ background:transparent; color:#c4d4df; border:0; border-radius:7px; padding:11px 12px; text-align:left; font-weight:700; font-size:12px; }}
 QPushButton#nav[selected="true"] {{ background:{TEAL}; color:#e9ffff; border-left:3px solid {GREEN}; }}
 QFrame#topbar {{ background:{CARD}; border:1px solid {BORDER}; border-radius:10px; }}
-QLabel#topStatus {{ color:#9ec1d8; font-weight:700; font-size:11px; }}
 QLabel#connected {{ color:{GREEN}; font-weight:800; font-size:11px; }}
 QLabel#pageTitle {{ font-size:25px; font-weight:800; color:{TEXT}; }}
 QLabel#pageSubtitle {{ color:#77a0bc; font-size:11px; }}
 QFrame#metric {{ background:{CARD}; border:1px solid {BORDER}; border-radius:9px; }}
 QLabel#metricLabel {{ color:#7fa0b7; font-size:11px; }}
 QLabel#metricValue {{ color:{TEXT}; font-size:24px; font-weight:800; }}
-QLabel#metricAccent {{ color:{GREEN}; font-size:13px; font-weight:800; }}
 QFrame#card {{ background:{CARD}; border:1px solid {BORDER}; border-radius:9px; }}
 QLabel#sectionTitle {{ font-size:15px; font-weight:800; color:{TEXT}; }}
 QLabel#sectionSubtitle {{ color:#86a5ba; font-size:11px; }}
@@ -84,7 +78,6 @@ QFrame#raw {{ background:#04101f; border:1px solid #12344f; border-radius:8px; }
 QLabel#rawText {{ color:#72bbf7; font-family:'Consolas','Cascadia Code',monospace; font-size:9px; }}
 QFrame#note {{ background:#08233a; border:0; border-radius:7px; }}
 QLabel#noteText {{ color:#a7c2d3; font-size:10px; }}
-QLabel#warningText {{ color:{AMBER}; font-size:10px; font-weight:800; }}
 """
 
 
@@ -100,7 +93,6 @@ class PriceBridge(QObject):
 
 
 def visual_oco_fixture() -> list[OCOOrder]:
-    """Read-only visual fixture matching the approved Stage 2 reference screen."""
     return [
         _fixture_oco(7964, "TUTUSDT", "876", "0.02350000", "0.02280000", "0.02281000", 10467, 10466, 1788990986329),
         _fixture_oco(8001, "TUTUSDT", "8752", "0.02350000", "0.02283000", "0.02284000", 10541, 10540, 1788991289853),
@@ -151,7 +143,7 @@ def _fixture_oco(
 
 
 class Stage12Window(QMainWindow):
-    """Approved Stage 2 read-only visual section; no cancel/create/modify actions."""
+    """Stage 2 visual section: open OCO selection and read-only details."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -167,10 +159,6 @@ class Stage12Window(QMainWindow):
         self.bridge.status.connect(self._on_status)
         self._build_ui()
         self._populate_orders()
-        if self.orders_table.rowCount():
-            self.orders_table.setCurrentCell(0, 0)
-            self.orders_table.selectRow(0)
-            self._select_row()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.feed is not None:
@@ -222,7 +210,6 @@ class Stage12Window(QMainWindow):
         shell.addWidget(sidebar)
 
         content = QWidget()
-        content.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         root = QVBoxLayout(content)
         root.setContentsMargins(22, 18, 22, 18)
         root.setSpacing(12)
@@ -231,9 +218,9 @@ class Stage12Window(QMainWindow):
         topbar = QFrame(objectName="topbar")
         tl = QHBoxLayout(topbar)
         tl.setContentsMargins(14, 10, 14, 10)
-        self.environment = QLabel("●  Testnet  ▾")
-        self.environment.setStyleSheet("color:#19c58b; font-size:11px; font-weight:800; background:#063a32; padding:6px 10px; border-radius:12px;")
-        tl.addWidget(self.environment)
+        env = QLabel("●  Testnet  ▾")
+        env.setStyleSheet("color:#19c58b; font-size:11px; font-weight:800; background:#063a32; padding:6px 10px; border-radius:12px;")
+        tl.addWidget(env)
         binance = QLabel("◆  Binance Testnet")
         binance.setStyleSheet("color:#f1f7fb; font-size:11px; font-weight:700;")
         tl.addWidget(binance)
@@ -262,17 +249,15 @@ class Stage12Window(QMainWindow):
 
         metrics = QHBoxLayout()
         metrics.setSpacing(12)
-        total = self._metric("Total Active OCO Orders", "—")
-        self.total_value = total[1]
-        metrics.addWidget(total[0], 1)
-        update = self._metric("Last Update", "—")
-        self.update_value = update[1]
+        total_frame, self.total_value = self._metric("Total Active OCO Orders", "—")
+        metrics.addWidget(total_frame, 1)
+        update_frame, self.update_value = self._metric("Last Update", "—")
         refresh_btn = QPushButton("↻")
         refresh_btn.setObjectName("refresh")
         refresh_btn.setFixedWidth(38)
         refresh_btn.clicked.connect(self._populate_orders)
-        update[0].layout().addWidget(refresh_btn)  # type: ignore[union-attr]
-        metrics.addWidget(update[0], 1)
+        update_frame.layout().addWidget(refresh_btn)  # type: ignore[union-attr]
+        metrics.addWidget(update_frame, 1)
         root.addLayout(metrics)
 
         body = QHBoxLayout()
@@ -296,9 +281,6 @@ class Stage12Window(QMainWindow):
         left.addLayout(header)
 
         self.orders_table = QTableWidget(0, 7)
-        self.orders_table.setHorizontalHeaderLabels(["#", "orderListId", "Symbol", "Status", "Qty", "TP Price", "SL Stop Price",])
-        # Keep the approved table shape while retaining a dedicated hidden spacer column via the status model.
-        self.orders_table.setColumnCount(7)
         self.orders_table.setHorizontalHeaderLabels(["#", "orderListId", "Symbol", "Status", "Qty", "TP Price", "SL Stop Price"])
         self.orders_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.orders_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -317,7 +299,9 @@ class Stage12Window(QMainWindow):
         heading = QLabel("Selected OCO Order")
         heading.setObjectName("sectionTitle")
         selected_header.addWidget(heading)
-        selected_header.addWidget(QLabel("الأمر المحدد"))
+        arabic_order = QLabel("الأمر المحدد")
+        arabic_order.setObjectName("sectionSubtitle")
+        selected_header.addWidget(arabic_order)
         selected_header.addStretch(1)
         self.selected_pill = QLabel("orderListId: —")
         self.selected_pill.setObjectName("bluePill")
@@ -329,17 +313,16 @@ class Stage12Window(QMainWindow):
         self.detail_contingency = self._info_value(info, 0, 1, "Contingency Type", "—")
         self.detail_list_type = self._info_value(info, 0, 2, "List Status Type", "—")
         self.detail_status = self._info_value(info, 0, 3, "List Order Status", "—")
-        self.detail_symbol.setObjectName("fieldValue")
         self.detail_status.setObjectName("statusPill")
         right.addLayout(info)
 
-        legs = QHBoxLayout()
-        legs.setSpacing(9)
-        tp_frame = self._leg_frame("TP", "Take Profit (Limit Maker)", "green")
-        sl_frame = self._leg_frame("SL", "Stop Loss (Stop Loss Limit)", "red")
-        legs.addWidget(tp_frame, 1)
-        legs.addWidget(sl_frame, 1)
-        right.addLayout(legs)
+        self._leg_row = QHBoxLayout()
+        self._leg_row.setSpacing(9)
+        tp_frame = self._new_leg_frame("TP", "Take Profit (Limit Maker)", "green")
+        sl_frame = self._new_leg_frame("SL", "Stop Loss (Stop Loss Limit)", "red")
+        self._leg_row.addWidget(tp_frame, 1)
+        self._leg_row.addWidget(sl_frame, 1)
+        right.addLayout(self._leg_row)
 
         raw = QFrame(objectName="raw")
         raw_l = QVBoxLayout(raw)
@@ -394,7 +377,7 @@ class Stage12Window(QMainWindow):
         return value_w
 
     @staticmethod
-    def _leg_frame(badge: str, title: str, kind: str) -> QFrame:
+    def _new_leg_frame(badge: str, title: str, kind: str) -> QFrame:
         frame = QFrame(objectName="legTP" if kind == "green" else "legSL")
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(10, 9, 10, 9)
@@ -407,7 +390,6 @@ class Stage12Window(QMainWindow):
         head.addWidget(title_label)
         head.addStretch(1)
         layout.addLayout(head)
-        frame._detail_layout = layout  # type: ignore[attr-defined]
         return frame
 
     def _populate_orders(self) -> None:
@@ -419,15 +401,7 @@ class Stage12Window(QMainWindow):
         for idx, order in enumerate(ordered, start=1):
             row = self.orders_table.rowCount()
             self.orders_table.insertRow(row)
-            values = [
-                str(idx),
-                str(order.order_list_id),
-                order.symbol,
-                order.list_order_status,
-                self._quantity(order),
-                self._fmt(self._tp(order)),
-                self._fmt(self._sl(order)),
-            ]
+            values = [str(idx), str(order.order_list_id), order.symbol, order.list_order_status, self._quantity(order), self._fmt(self._tp(order)), self._fmt(self._sl(order))]
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -455,29 +429,13 @@ class Stage12Window(QMainWindow):
         self.detail_list_type.setText(order.list_status_type)
         self.detail_status.setText(order.list_order_status)
         self.raw_text.setText(self._raw_preview(order))
-        self._render_legs(order)
-        self.symbol_value_placeholder = order.symbol
+        self._fill_leg_card(self._leg_row.itemAt(0).widget(), self._tp_leg(order), "green")
+        self._fill_leg_card(self._leg_row.itemAt(1).widget(), self._sl_leg(order), "red")
         self._start_feed(order.symbol)
-
-    def _render_legs(self, order: OCOOrder) -> None:
-        # Remove old leg widgets from the right-hand area and rebuild the two cards.
-        # This keeps the screen deterministic and read-only.
-        # The cards are located via the fixed layout parent chain.
-        # Reusing the existing frame references avoids any data edits in the model.
-        self._clear_leg_cards()
-        parent = self.raw_text.parentWidget().parentWidget()  # type: ignore[union-attr]
-        # Inserted before raw frame: locate the leg-row layout stored on the right card.
-        leg_row = self._leg_row
-        self._fill_leg_card(leg_row.itemAt(0).widget(), self._tp_leg(order), "green")
-        self._fill_leg_card(leg_row.itemAt(1).widget(), self._sl_leg(order), "red")
-
-    def _clear_leg_cards(self) -> None:
-        if not hasattr(self, "_leg_row"):
-            return
 
     @staticmethod
     def _fill_leg_card(frame: QWidget | None, leg: OrderLeg | None, kind: str) -> None:
-        if frame is None:
+        if frame is None or leg is None:
             return
         layout = frame.layout()
         while layout.count() > 1:
@@ -485,11 +443,10 @@ class Stage12Window(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        if leg is None:
-            return
-        rows = [("Order ID", str(leg.order_id)), ("Type", leg.order_type), ("Price", Stage12Window._fmt(leg.price)), ("Quantity", str(leg.quantity)), ("Time In Force", leg.time_in_force or "GTC")]
+        rows = [("Order ID", str(leg.order_id)), ("Type", leg.order_type), ("Price", Stage12Window._fmt(leg.price))]
         if leg.stop_price is not None:
-            rows.insert(3, ("Stop Price", Stage12Window._fmt(leg.stop_price)))
+            rows.append(("Stop Price", Stage12Window._fmt(leg.stop_price)))
+        rows.extend([("Quantity", str(leg.quantity)), ("Time In Force", leg.time_in_force or "GTC")])
         for label, value in rows:
             row = QHBoxLayout()
             l = QLabel(label)
@@ -519,9 +476,10 @@ class Stage12Window(QMainWindow):
         elif status == "STOPPED":
             self.connected.setText("▮  Stopped")
 
-    def _raw_preview(self, order: OCOOrder) -> str:
-        raw_keys = ", ".join(order.raw.keys())
-        return "{" + "\n  " + raw_keys + "\n}"
+    @staticmethod
+    def _raw_preview(order: OCOOrder) -> str:
+        keys = ", ".join(order.raw.keys())
+        return "{\n  " + keys + "\n}"
 
     @staticmethod
     def _quantity(order: OCOOrder) -> str:
