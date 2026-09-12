@@ -257,9 +257,11 @@ class Stage12Window(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.orders_table.setItem(row, col, item)
         self.count_label.setText(f"{len(ordered)} OCO")
-        if ordered and self.orders_table.currentRow() < 0:
+        if ordered:
             self.orders_table.selectRow(0)
             self._select_row()
+        else:
+            self.selected = None
 
     def _select_row(self) -> None:
         rows = self.orders_table.selectionModel().selectedRows()
