@@ -14,8 +14,8 @@ class Stage12MonitorWindow(Stage12Window):
     """Stage 2 with the isolated Dynamic Trade Monitoring configuration panel."""
 
     def __init__(self) -> None:
-        super().__init__()
         self.monitor_panel = DynamicMonitorPanel()
+        super().__init__()
         cards = self.findChildren(QFrame, "card")
         if len(cards) < 2:
             raise RuntimeError("Stage 2 right detail card was not found")
