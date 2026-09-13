@@ -55,12 +55,12 @@ At reposition time, the new OCO prices are calculated from the newest usable liv
 ```text
 TP Sale Price      = live_price × (1 + TP_distance/100)
 SL Trigger Price   = live_price × (1 - SL_distance/100)
-SL Limit Price     = derived automatically from SL Trigger Price
+SL Limit Price     = SL Trigger Price + 1 × tickSize
 ```
 
-The system owns the internal relationship between `SL Trigger Price` and `SL Limit Price`. It applies a small fixed internal offset defined by the product design so the two required Binance fields are both populated without asking the user for a second stop percentage.
+The system owns the internal relationship between `SL Trigger Price` and `SL Limit Price`. The fixed internal difference is exactly **one exchange tick (`1 × tickSize`)**. It is not a user-controlled percentage.
 
-All prices are then normalized to the exchange `tickSize` and checked against current exchange constraints before creation. Normalization must preserve the intended stop relationship; the two stop prices must not collapse to the same tick or reverse their required relationship.
+All prices are normalized to the exchange `tickSize` and checked against current exchange constraints before creation. Normalization must preserve the intended stop relationship; the two stop prices must not collapse to the same tick or reverse their required relationship.
 
 The expected stop relationship for the SELL stop leg is:
 
