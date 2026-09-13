@@ -28,14 +28,15 @@ The UI must never collapse the two stop-leg prices into one field.
 
 Automatic monitoring is optional and is enabled by the user for a selected open OCO.
 
-The monitoring strategy has three user-controlled percentages:
+The monitoring strategy has **three user-controlled percentages only**:
 
 ```text
-Reposition Trigger Rise %   e.g. 1.00%
-TP Distance Above Current %  e.g. 4.00%
-SL Trigger Distance Below Current %  e.g. 2.00%
-SL Limit Distance Below Current %    e.g. 1.99%
+Reposition Trigger Rise %      e.g. 1.00%
+TP Distance Above Current %    e.g. 4.00%
+SL Distance Below Current %    e.g. 2.00%
 ```
+
+The user does **not** enter a separate percentage for `SL Limit Price`.
 
 When monitoring starts, the current live price becomes the reference/anchor.
 
@@ -53,11 +54,13 @@ At reposition time, the new OCO prices are calculated from the newest usable liv
 
 ```text
 TP Sale Price      = live_price × (1 + TP_distance/100)
-SL Trigger Price   = live_price × (1 - SL_trigger_distance/100)
-SL Limit Price     = live_price × (1 - SL_limit_distance/100)
+SL Trigger Price   = live_price × (1 - SL_distance/100)
+SL Limit Price     = derived automatically from SL Trigger Price
 ```
 
-All prices are then normalized to the exchange `tickSize` and checked against current exchange constraints before creation.
+The system owns the internal relationship between `SL Trigger Price` and `SL Limit Price`. It applies a small fixed internal offset defined by the product design so the two required Binance fields are both populated without asking the user for a second stop percentage.
+
+All prices are then normalized to the exchange `tickSize` and checked against current exchange constraints before creation. Normalization must preserve the intended stop relationship; the two stop prices must not collapse to the same tick or reverse their required relationship.
 
 The expected stop relationship for the SELL stop leg is:
 
