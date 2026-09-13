@@ -2,59 +2,116 @@
 
 ## 1. Product boundary
 
-V1 is a single-order OCO replacement assistant for Binance Spot. It is not a trading strategy, signal engine, portfolio manager, or general order-entry system.
+V1 is a Binance Spot OCO management and replacement assistant. It is not a signal engine, portfolio manager, or general order-entry system.
 
 ## 2. Selection rule
 
-The application lists open OCO order lists returned by the exchange. The user explicitly selects one row. From that moment until completion or cancellation, the selected `orderListId` is the only target of the editing and activation workflow.
+The application lists active OCO order lists returned by Binance. The user selects one exact `orderListId`. All editing, monitoring, and replacement actions remain tied to that exact order list until a successful replacement creates a new `orderListId`.
 
-Ten OCOs on the same symbol remain ten separate targets. Selecting one must never cause a lookup, cancellation, or replacement of another list merely because the symbol is the same.
+Multiple OCOs for the same symbol are independent targets and must never be mixed.
 
 ## 3. Original vs draft
 
-The selected OCO is loaded into an in-memory snapshot/draft. Every field returned by Binance is preserved in `raw` data. The UI may expose fields intentionally, but it must not invent exchange fields or silently manufacture trading rules.
+Selecting an OCO loads an in-memory snapshot/draft. All exchange-returned fields remain available in the raw payload. Draft changes are local until an explicit activation/replacement operation.
 
-Typing changes only the local draft. There is no exchange request during drafting.
+## 4. OCO price model
 
-## 4. Live monitor
+For a SELL OCO the application must distinguish three prices:
 
-The live monitor starts only after an OCO is selected. It is visually separate from the editor. It shows the selected symbol's live last price and a continuously refreshed reference value for the highest currently valid sell stop candidate, derived only from exchange constraints known for the symbol/order type.
+- `TP Sale Price`: the price of the upper LIMIT/LIMIT_MAKER sell leg.
+- `SL Trigger Price`: the `stopPrice` that activates the lower stop leg.
+- `SL Limit Price`: the limit `price` placed after the stop is triggered.
 
-The monitor is informational. It does not fill the user's draft and does not decide the user's stop or take-profit.
+The UI must never collapse the two stop-leg prices into one field.
 
-## 5. Editor
+## 5. Dynamic Trade Monitoring
 
-The editor is pre-populated from the selected active OCO so the user can modify only what they choose: take-profit, stop, or both. Unchanged fields remain unchanged in the draft. Quantity comes from the selected order and is not recomputed from account balance or entry price.
+Automatic monitoring is optional and is enabled by the user for a selected open OCO.
 
-## 6. Activation
+The monitoring strategy has three user-controlled percentages:
 
-The original OCO remains active until the user presses `ACTIVATE`.
+```text
+Reposition Trigger Rise %   e.g. 1.00%
+TP Distance Above Current %  e.g. 4.00%
+SL Trigger Distance Below Current %  e.g. 2.00%
+SL Limit Distance Below Current %    e.g. 1.99%
+```
 
-On activation the application:
+When monitoring starts, the current live price becomes the reference/anchor.
 
-1. Verifies the selected list still exists.
-2. Verifies it is still active/executing.
-3. Verifies the identity is still the selected `orderListId`.
-4. Validates the prepared draft structurally.
-5. Cancels only the selected OCO list.
-6. Places the prepared replacement OCO.
-7. Confirms the replacement result.
-8. Records elapsed execution time and final state.
+When live price reaches or exceeds:
 
-If the original is no longer active at step 1–3, activation is aborted and no replacement is created.
+```text
+anchor × (1 + trigger/100)
+```
 
-If cancellation succeeds and replacement creation fails, state becomes `FAILED_NEEDS_ATTENTION`; the application performs no unrelated recovery action on other orders.
+an automatic OCO reposition event is created.
 
-## 7. Stop-loss rule
+The reposition event is edge-triggered, not a condition that must remain true. Once the trigger is crossed, a small pullback during processing does not invalidate the event.
 
-The application must not impose a trading policy such as "stop must be below entry". Exchange validity rules and symbol filters are the authority. The app can show exchange-derived constraints and final API errors.
+At reposition time, the new OCO prices are calculated from the newest usable live price selected by the execution flow:
 
-## 8. Modes
+```text
+TP Sale Price      = live_price × (1 + TP_distance/100)
+SL Trigger Price   = live_price × (1 - SL_trigger_distance/100)
+SL Limit Price     = live_price × (1 - SL_limit_distance/100)
+```
 
-- PAPER: deterministic simulation only.
-- TESTNET: real Binance test environment after Paper acceptance.
-- LIVE: disabled until explicit acceptance of test evidence.
+All prices are then normalized to the exchange `tickSize` and checked against current exchange constraints before creation.
 
-## 9. V1 non-goals
+The expected stop relationship for the SELL stop leg is:
 
-No Market orders, standalone Limit order manager, Trailing Stop manager, new-position entry, withdrawals, transfers, strategy logic, automatic trailing, or trading recommendations.
+```text
+SL Limit Price > SL Trigger Price
+```
+
+with both remaining below the current market price at creation time, subject to Binance's authoritative rules.
+
+## 6. Gap / jump handling
+
+If price jumps across multiple trigger intervals before the bot can process them, the application must not replay every missed trigger as a chain of cancel/create operations.
+
+Instead:
+
+1. Detect that at least one trigger has been crossed.
+2. Coalesce the missed movement into one reposition event.
+3. Calculate the new levels from the newest usable live price available to the replacement flow.
+4. Perform at most one replacement for that event.
+5. Set the replacement's latest usable live price as the next monitoring anchor.
+
+## 7. Processing lock
+
+Only one automatic replacement may be in flight for a monitored OCO at a time. New price updates received while the replacement is busy are recorded as latest price state, not launched as parallel replacements.
+
+## 8. Replacement safety
+
+Before automatic replacement:
+
+1. Re-query the exact selected `orderListId`.
+2. Confirm it still exists, is still active/executing, and still matches the selected symbol/identity.
+3. Capture the latest usable live price.
+4. Build and validate the replacement OCO.
+5. Cancel only the selected OCO.
+6. Refresh the latest usable price before placement.
+7. Revalidate the final replacement relationship.
+8. Create the replacement.
+9. Confirm the new `orderListId`.
+10. Record elapsed time and final state.
+
+If the original order completes before cancellation, stop monitoring and create nothing.
+
+If cancellation succeeds but replacement creation fails, enter `FAILED_NEEDS_ATTENTION`; do not blindly retry or touch unrelated orders.
+
+## 9. Manual replacement
+
+Manual replacement follows the same exact-order identity and safety rules. The user may edit TP, SL Trigger, and SL Limit independently in the draft before activation.
+
+## 10. Modes
+
+- `PAPER`: deterministic simulation only.
+- `TESTNET`: real Binance Testnet after Paper acceptance.
+- `LIVE`: disabled until explicit acceptance of the full test evidence.
+
+## 11. Non-goals
+
+No Market-order module, standalone Limit manager, new-position entry, withdrawals, transfers, strategy recommendations, or unrelated portfolio automation in V1.
