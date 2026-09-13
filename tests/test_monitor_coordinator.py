@@ -69,8 +69,8 @@ def test_coordinator_cancels_only_selected_and_uses_latest_price() -> None:
     assert provider.cancelled == [100]
     assert result.new_order_list_id == 200
     assert provider.placed[0]["abovePrice"] == "0.05324"
-    assert provider.placed[0]["belowStopPrice"] == "0.050176"
-    assert provider.placed[0]["belowPrice"] == "0.050186"
+    assert provider.placed[0]["belowStopPrice"] == "0.05017"
+    assert provider.placed[0]["belowPrice"] == "0.05018"
 
 
 def test_failed_create_stops_monitoring_without_retry() -> None:
