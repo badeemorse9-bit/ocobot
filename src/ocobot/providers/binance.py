@@ -8,7 +8,7 @@ import threading
 import time
 from decimal import Decimal
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 import websockets
@@ -28,14 +28,16 @@ class BinanceOCOProvider:
         if mode not in {"TESTNET", "LIVE"}:
             raise ValueError("mode must be TESTNET or LIVE")
         self.mode = mode
-        self.api_key = (api_key or os.getenv("BINANCE_API_KEY") or "").strip()
-        self.api_secret = (api_secret or os.getenv("BINANCE_API_SECRET") or "").strip()
+        key_env = "BINANCE_TESTNET_API_KEY" if mode == "TESTNET" else "BINANCE_API_KEY"
+        secret_env = "BINANCE_TESTNET_API_SECRET" if mode == "TESTNET" else "BINANCE_API_SECRET"
+        self.api_key = (api_key or os.getenv(key_env) or os.getenv("BINANCE_API_KEY") or "").strip()
+        self.api_secret = (api_secret or os.getenv(secret_env) or os.getenv("BINANCE_API_SECRET") or "").strip()
         self.timeout = timeout
         self._http = httpx.Client(timeout=timeout)
         self._filter_cache: dict[str, tuple[float, Decimal]] = {}
         self._subscriptions: list[tuple[threading.Thread, threading.Event]] = []
         if not self.api_key or not self.api_secret:
-            raise ValueError("BINANCE_API_KEY and BINANCE_API_SECRET are required for Binance mode")
+            raise ValueError(f"{key_env} and {secret_env} are required for Binance mode")
         if self.mode == "LIVE":
             raise RuntimeError("LIVE trading is intentionally disabled; use TESTNET")
 
@@ -238,10 +240,9 @@ class BinanceOCOProvider:
         payload["timestamp"] = int(time.time() * 1000)
         payload.setdefault("recvWindow", 5000)
 
-        # Binance verifies the HMAC over the exact percent-encoded parameter
-        # string received by the server. Build that string once and send the
-        # same bytes instead of asking httpx to re-encode a dict differently.
-        encoded = urlencode(payload, doseq=True, safe="")
+        # Binance requires the percent-encoded payload itself to be the HMAC input
+        # as of the January 2026 signing change. Build the exact encoded query once.
+        encoded = urlencode(payload, doseq=True, safe="", quote_via=quote)
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             encoded.encode("utf-8"),
