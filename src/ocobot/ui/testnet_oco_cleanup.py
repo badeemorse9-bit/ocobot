@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import sys
 
@@ -29,17 +30,37 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _credentials() -> tuple[str, str]:
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
+    if api_key and api_secret:
+        return api_key, api_secret
+
+    print("Binance Testnet credentials are not set in this terminal.")
+    api_key = input("BINANCE_API_KEY: ").strip()
+    api_secret = getpass.getpass("BINANCE_API_SECRET (hidden): ").strip()
+    if not api_key or not api_secret:
+        raise ValueError("API key and API secret are required.")
+    return api_key, api_secret
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
-        print("Missing BINANCE_API_KEY / BINANCE_API_SECRET environment variables.", file=sys.stderr)
-        return 2
 
     if not args.order_list_ids and not args.all:
         print("Choose --order-list-id ID (repeatable) or --all.", file=sys.stderr)
         return 2
 
-    provider = BinanceOCOProvider(mode="TESTNET")
+    try:
+        api_key, api_secret = _credentials()
+    except (EOFError, KeyboardInterrupt):
+        print("Credential input aborted.", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    provider = BinanceOCOProvider(mode="TESTNET", api_key=api_key, api_secret=api_secret)
     try:
         open_ocos = provider.list_open_ocos()
         if not open_ocos:
