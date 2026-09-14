@@ -28,8 +28,8 @@ class BinanceOCOProvider:
         if mode not in {"TESTNET", "LIVE"}:
             raise ValueError("mode must be TESTNET or LIVE")
         self.mode = mode
-        self.api_key = api_key or os.getenv("BINANCE_API_KEY")
-        self.api_secret = api_secret or os.getenv("BINANCE_API_SECRET")
+        self.api_key = (api_key or os.getenv("BINANCE_API_KEY") or "").strip()
+        self.api_secret = (api_secret or os.getenv("BINANCE_API_SECRET") or "").strip()
         self.timeout = timeout
         self._http = httpx.Client(timeout=timeout)
         self._filter_cache: dict[str, tuple[float, Decimal]] = {}
@@ -93,7 +93,6 @@ class BinanceOCOProvider:
         raise ValueError(f"PRICE_FILTER/tickSize not found for {symbol}")
 
     def subscribe_price(self, symbol: str, callback: Callable[[Decimal], None]) -> Callable[[], None]:
-        """Subscribe to live prices while keeping GUI callbacks bounded and reconnecting automatically."""
         stop = threading.Event()
         symbol_upper = symbol.upper()
         normalized = symbol_upper.lower()
@@ -130,16 +129,12 @@ class BinanceOCOProvider:
                             price = Decimal(str(event["c"]))
                         if price is None or price <= 0:
                             continue
-
                         pending_price = price
                         now = time.monotonic()
-                        # Keep raw WebSocket input flowing internally, but coalesce GUI-facing
-                        # callbacks to 50 updates/second so a fast symbol cannot flood Qt events.
                         if now - last_emit >= 0.020:
                             callback(pending_price)
                             pending_price = None
                             last_emit = now
-
                     if pending_price is not None and not stop.is_set():
                         callback(pending_price)
 
@@ -239,14 +234,26 @@ class BinanceOCOProvider:
         return _decode_response(response)
 
     def _signed_request(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
-        payload = dict(params or {})
+        payload = {str(key): value for key, value in (params or {}).items() if value is not None}
         payload["timestamp"] = int(time.time() * 1000)
         payload.setdefault("recvWindow", 5000)
-        query = urlencode(payload, doseq=True)
-        signature = hmac.new(self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
-        payload["signature"] = signature
+
+        # Binance verifies the HMAC over the exact percent-encoded parameter
+        # string received by the server. Build that string once and send the
+        # same bytes instead of asking httpx to re-encode a dict differently.
+        encoded = urlencode(payload, doseq=True, safe="")
+        signature = hmac.new(
+            self.api_secret.encode("utf-8"),
+            encoded.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        query = f"{encoded}&signature={signature}"
         headers = {"X-MBX-APIKEY": self.api_key}
-        response = self._http.request(method, self.rest_base + path, params=payload, headers=headers)
+        response = self._http.request(
+            method,
+            f"{self.rest_base}{path}?{query}",
+            headers=headers,
+        )
         return _decode_response(response)
 
 
