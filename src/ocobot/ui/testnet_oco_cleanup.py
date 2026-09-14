@@ -31,16 +31,17 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _credentials() -> tuple[str, str]:
-    api_key = os.getenv("BINANCE_API_KEY")
-    api_secret = os.getenv("BINANCE_API_SECRET")
+    # Testnet commands must prefer the dedicated Testnet credentials.
+    api_key = os.getenv("BINANCE_TESTNET_API_KEY") or os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_TESTNET_API_SECRET") or os.getenv("BINANCE_API_SECRET")
     if api_key and api_secret:
-        return api_key, api_secret
+        return api_key.strip(), api_secret.strip()
 
     print("Binance Testnet credentials are not set in this terminal.")
-    api_key = input("BINANCE_API_KEY: ").strip()
-    api_secret = getpass.getpass("BINANCE_API_SECRET (hidden): ").strip()
+    api_key = input("BINANCE_TESTNET_API_KEY: ").strip()
+    api_secret = getpass.getpass("BINANCE_TESTNET_API_SECRET (hidden): ").strip()
     if not api_key or not api_secret:
-        raise ValueError("API key and API secret are required.")
+        raise ValueError("Testnet API key and API secret are required.")
     return api_key, api_secret
 
 
