@@ -30,8 +30,14 @@ class DynamicMonitorSettings:
             )
         except (InvalidOperation, ValueError) as exc:
             raise ValueError("Monitoring percentages must be valid decimals") from exc
-        if any(value < 0 for value in values):
-            raise ValueError("Monitoring percentages cannot be negative")
+        if any(not value.is_finite() for value in values):
+            raise ValueError("Monitoring percentages must be finite decimals")
+        if values[0] <= 0:
+            raise ValueError("Trigger rise percentage must be greater than zero")
+        if values[1] <= 0:
+            raise ValueError("TP distance percentage must be greater than zero")
+        if values[2] <= 0 or values[2] >= Decimal("100"):
+            raise ValueError("SL distance percentage must be greater than zero and below 100")
         return cls(*values)
 
 

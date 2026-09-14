@@ -14,3 +14,11 @@ env/
 dist/
 build/
 *.log
+
+# Postman local workspace metadata and generated artifacts
+.postman/
+postman/
+
+# Accidental shell-redirection artifacts
+0)
+0))

@@ -44,14 +44,19 @@ def test_stop_limit_gap_tracks_tick_size() -> None:
     assert levels.sl_limit_price > levels.sl_trigger_price
 
 
-def test_invalid_negative_percentage_is_rejected() -> None:
-    with pytest.raises(ValueError, match="cannot be negative"):
-        DynamicMonitorSettings.from_values("1", "4", "-2")
-
-
-def test_tiny_stop_distance_that_collapses_against_market_is_rejected() -> None:
-    settings = DynamicMonitorSettings.from_values("1", "4", "0")
-    with pytest.raises(ValueError, match="below the current market"):
-        calculate_reposition_levels(
-            Decimal("0.05000"), settings, Decimal("0.00001")
-        )
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (("0", "4", "2"), "Trigger rise"),
+        (("1", "0", "2"), "TP distance"),
+        (("1", "4", "0"), "SL distance"),
+        (("1", "4", "100"), "below 100"),
+        (("NaN", "4", "2"), "finite"),
+        (("1", "Infinity", "2"), "finite"),
+    ],
+)
+def test_invalid_monitoring_percentages_are_rejected(
+    values: tuple[str, str, str], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        DynamicMonitorSettings.from_values(*values)

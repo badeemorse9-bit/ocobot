@@ -77,19 +77,24 @@ SL Limit Price
 ```text
 Reposition Trigger Rise %
 TP Distance Above Current %
-SL Trigger Distance Below Current %
-SL Limit Distance Below Current %
+SL Distance Below Current %
 ```
+
+لا توجد نسبة مستقلة لـ `SL Limit Price`؛ النظام يشتقها داخليًا.
 
 ## الحساب
 
 ```text
 TP Sale Price    = live × (1 + TP%/100)
-SL Trigger Price = live × (1 - SL Trigger%/100)
-SL Limit Price   = live × (1 - SL Limit%/100)
+SL Trigger Price = live × (1 - SL%/100)
+SL Limit Price   = normalized SL Trigger + 1 × tickSize
 ```
 
-ثم التطبيع وفق `tickSize` وفحص قيود Binance.
+ثم التطبيع وفق `tickSize` وفحص قيود Binance مع الحفاظ على:
+
+```text
+SL Trigger Price < SL Limit Price < live price
+```
 
 لا يعتمد الحساب على سعر الدخول أو TP/SL القديم.
 
@@ -183,8 +188,7 @@ Reference Price
 Current Price
 Next Trigger
 TP Distance %
-SL Trigger Distance %
-SL Limit Distance %
+SL Distance %
 Current TP
 Current SL Trigger
 Current SL Limit

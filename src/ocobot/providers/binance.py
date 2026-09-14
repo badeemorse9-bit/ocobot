@@ -195,9 +195,14 @@ class BinanceOCOProvider:
         above_type = str(payload.get("aboveType", "LIMIT_MAKER"))
         below_type = str(payload.get("belowType", "STOP_LOSS_LIMIT"))
         params: dict[str, Any] = {"symbol": symbol, "side": side, "quantity": quantity, "aboveType": above_type, "belowType": below_type, "newOrderRespType": "RESULT"}
-        for key in ("abovePrice", "aboveStopPrice", "aboveTimeInForce", "belowPrice", "belowStopPrice", "belowTimeInForce"):
+        optional_keys = ("abovePrice", "aboveStopPrice", "belowPrice", "belowStopPrice")
+        for key in optional_keys:
             if payload.get(key) is not None:
                 params[key] = str(payload[key])
+        if above_type not in {"LIMIT", "LIMIT_MAKER"} and payload.get("aboveTimeInForce") is not None:
+            params["aboveTimeInForce"] = str(payload["aboveTimeInForce"])
+        if below_type != "STOP_LOSS" and payload.get("belowTimeInForce") is not None:
+            params["belowTimeInForce"] = str(payload["belowTimeInForce"])
         return self._signed_request("POST", "/api/v3/orderList/oco", params)
 
     def _load_order_list(self, row: dict[str, Any]) -> OCOOrder:

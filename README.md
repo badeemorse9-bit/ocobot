@@ -45,6 +45,14 @@ python -m ocobot
 
 Paper UI starts with built-in sample OCOs. No credentials are required.
 
+For Binance Spot Testnet, use the dedicated environment variables
+`BINANCE_TESTNET_API_KEY` and `BINANCE_TESTNET_API_SECRET`. LIVE trading remains
+intentionally disabled. A safe read-only connectivity check is available with:
+
+```bash
+python scripts/testnet_read_probe.py
+```
+
 ## Repository map
 
 - `docs/` — specification and safety model.

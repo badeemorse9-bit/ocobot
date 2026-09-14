@@ -16,9 +16,13 @@ Spot Testnet supports the `/api/*` endpoints and does not provide the `/sapi/*` 
 Set the following environment variables locally. Never commit them:
 
 ```text
-BINANCE_API_KEY=...
-BINANCE_API_SECRET=...
+BINANCE_TESTNET_API_KEY=...
+BINANCE_TESTNET_API_SECRET=...
 ```
+
+For backward compatibility, the adapter can fall back to `BINANCE_API_KEY` and
+`BINANCE_API_SECRET`, but the dedicated Testnet names are strongly preferred to
+prevent accidental credential mixing.
 
 Install the network dependencies:
 
@@ -48,6 +52,27 @@ When **MAX STOP** is armed, the service reads the latest provider price again be
 
 There is no atomic cancel-and-create operation in this workflow. A successful cancellation followed by a failed replacement is therefore surfaced as `FAILED_NEEDS_ATTENTION`; the application must not search for or modify any other order.
 
-## Testnet milestone boundary
+## Testnet validation status
 
-The adapter is implemented, but the desktop UI is still Paper-only in this milestone. Before exposing a Testnet activation button in the GUI, the next validation step is to run connectivity, authentication, order-list read, exact-order selection, and controlled OCO replacement against a dedicated Spot Testnet account.
+The desktop workflow supports switching explicitly from Paper to Testnet and
+keeps LIVE disabled. A read-only validation probe is available at
+`scripts/testnet_read_probe.py`.
+
+Validated against a dedicated Spot Testnet account:
+
+- Public ticker connectivity: passed.
+- Symbol `tickSize` lookup: passed.
+- Signed authentication and open-OCO read: passed.
+- Open OCO count during the probe: `0`.
+
+The controlled cancel/create acceptance test has now passed with two open OCOs:
+
+- Target `TUTUSDT` was replaced from `orderListId=98130` to `98135`.
+- Control `NOTUSDT` remained unchanged at `orderListId=97902`.
+- Measured replacement time was `2852.79 ms` in this Testnet run.
+- No blind retry occurred after an earlier create failure; the adapter was fixed
+  to omit unsupported `aboveTimeInForce` for `LIMIT_MAKER`, then the test was
+  restarted explicitly with a fresh disposable target.
+
+These IDs and timings are Testnet evidence only and may disappear after a
+Testnet reset. They are not production guarantees.

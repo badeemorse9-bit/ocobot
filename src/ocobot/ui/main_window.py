@@ -127,8 +127,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1050, 700)
         self.setStyleSheet(APP_STYLE)
         self.mode = "PAPER"
-        self.testnet_api_key = os.getenv("BINANCE_API_KEY", "")
-        self.testnet_api_secret = os.getenv("BINANCE_API_SECRET", "")
+        self.testnet_api_key = os.getenv("BINANCE_TESTNET_API_KEY") or os.getenv("BINANCE_API_KEY", "")
+        self.testnet_api_secret = os.getenv("BINANCE_TESTNET_API_SECRET") or os.getenv("BINANCE_API_SECRET", "")
         self.dynamic_stop_percent = Decimal("0.50")
         self.provider: OCOProvider = self._new_paper_provider()
         self.service = OCOEditorService(self.provider)

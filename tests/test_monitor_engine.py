@@ -44,14 +44,19 @@ def test_successful_replacement_uses_latest_price_as_new_anchor() -> None:
     assert engine.on_price(Decimal("0.05172")) is not None
 
 
-def test_failed_replacement_allows_fresh_event_from_same_reference() -> None:
+def test_failed_replacement_requires_operator_attention_and_blocks_retries() -> None:
     engine = DynamicMonitorEngine(settings(), Decimal("0.00001"))
     engine.start(Decimal("0.05000"))
     assert engine.on_price(Decimal("0.05050")) is not None
+
     engine.fail_replacement()
+
     assert engine.reference_price == Decimal("0.05000")
+    assert engine.failed_needs_attention is True
+    assert engine.trigger_latched is True
+    assert engine.replacement_in_flight is False
     assert engine.on_price(Decimal("0.05049")) is None
-    assert engine.on_price(Decimal("0.05050")) is not None
+    assert engine.on_price(Decimal("0.05050")) is None
 
 
 def test_price_before_start_is_rejected() -> None:
