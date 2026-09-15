@@ -827,6 +827,23 @@ class MainWindow(QMainWindow):
         if result.success and result.new_order_list_id is not None:
             self._selected_id = result.new_order_list_id
             self.monitor_order_id.setText(str(result.new_order_list_id))
+            try:
+                self.service.select(result.new_order_list_id)
+            except Exception as exc:
+                # Rehydration against the new OCO failed. Never retain the old
+                # cancelled selection as valid and never auto-select another OCO.
+                self.service.selection = None
+                self.service.original = None
+                self.service.draft = None
+                self._clear_selection_ui()
+                message = (
+                    f"Replacement succeeded (new order {result.new_order_list_id}) "
+                    f"but reloading it failed — refresh manually ({exc})."
+                )
+                self._trail_event("NEEDS_REFRESH", message)
+                self.statusBar().showMessage(message)
+                self.dynamic_monitor_panel.set_monitoring_state(False, message)
+                return
             if result.latest_price is not None:
                 self.monitor_reference.setText(f"{result.latest_price:f}")
             self._refresh_orders(False)

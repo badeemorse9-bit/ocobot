@@ -51,7 +51,7 @@ class Stage12MonitorWindow(Stage12Window):
             self.demo_provider.set_price(snapshot.price)
         self._refresh_monitor_preview(snapshot.price)
         if self.monitor_coordinator is not None:
-            result = self.monitor_coordinator.on_price(snapshot.price)
+            result = self.monitor_coordinator.on_price(snapshot.price, symbol=snapshot.symbol)
             if result is not None:
                 self._handle_replacement_result(result)
 

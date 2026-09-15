@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from threading import Lock
+from threading import Event, Lock
 from typing import Any
 
 
@@ -43,25 +43,35 @@ class DynamicMonitorCoordinator:
         self._lock = Lock()
         self._monitoring = False
         self._failed = False
+        self._stop_event = Event()
 
     def start(self, current_price: Decimal | None = None) -> None:
+        self._stop_event.clear()
         price = current_price or self.provider.get_last_price(self.symbol)
         self.engine.start(price)
         self._monitoring = True
         self._failed = False
 
     def stop(self) -> None:
+        # Cooperative stop: signal without acquiring the lock so a call can
+        # interrupt an in-flight _replace that is blocked on a provider call.
         self._monitoring = False
+        self._stop_event.set()
 
-    def on_price(self, current_price: Decimal) -> MonitorReplacementResult | None:
+    def on_price(self, current_price: Decimal, symbol: str | None = None) -> MonitorReplacementResult | None:
         if not self._monitoring or self._failed:
+            return None
+        # R3 symbol guard: drop a price that is not for the selected OCO's symbol so a
+        # stale/cross-symbol feed can never latch the trigger or drive _replace.
+        # Identity remains the exact orderListId (see _replace); this is defense-in-depth.
+        if symbol is not None and symbol.strip().upper() != self.symbol.strip().upper():
             return None
         with self._lock:
             event = self.engine.on_price(current_price)
             if event is None:
                 return None
             try:
-                result = self._replace(event)
+                result: MonitorReplacementResult | None = self._replace(event)
             except Exception as exc:
                 self.engine.fail_replacement()
                 self._failed = True
@@ -71,11 +81,34 @@ class DynamicMonitorCoordinator:
                     False, str(exc), self.order_list_id, state=state
                 )
 
+            if not result.success:
+                # Clean cooperative stop before any exchange mutation: no
+                # rollover / no engine advancement, and _failed stays False.
+                return result
+
             self.order_list_id = result.new_order_list_id or self.order_list_id
             self.engine.complete_replacement(result.latest_price)
             return result
 
-    def _replace(self, event: RepositionEvent) -> MonitorReplacementResult:
+    def _abort_for_stop(self) -> MonitorReplacementResult:
+        # Clean no-op stop: no exchange mutation happened, so this is NOT a
+        # failure. Reset the in-flight engine flag set for this attempt and
+        # leave _failed / failed_needs_attention untouched.
+        self.engine.replacement_in_flight = False
+        self.engine.trigger_latched = False
+        return MonitorReplacementResult(
+            False,
+            "monitor stopped before cancellation; no changes made",
+            self.order_list_id,
+            state=ABORTED_NO_CREATE,
+        )
+
+    def _replace(self, event: RepositionEvent) -> MonitorReplacementResult | None:
+        # (a) Cooperative stop check at the very top, before any get_oco or
+        # validation: abort with no exchange mutation. NOT a failure.
+        if self._stop_event.is_set():
+            return self._abort_for_stop()
+
         current = self.provider.get_oco(self.order_list_id)
         if current is None:
             raise RuntimeError("Selected OCO no longer exists; replacement aborted")
@@ -85,6 +118,17 @@ class DynamicMonitorCoordinator:
             raise RuntimeError("Selected OCO is no longer active; replacement aborted")
 
         self._ensure_sell_oco(current)
+
+        # (b) Final cooperative stop check immediately BEFORE cancel_oco: if
+        # stopped here, no exchange mutation has occurred yet, so abort cleanly
+        # (NOT a failure).
+        if self._stop_event.is_set():
+            return self._abort_for_stop()
+
+        # INVARIANT: once cancel_oco is issued below, cancel->create is an
+        # ATOMIC section. We must NEVER check the stop token between cancel_oco
+        # and place_oco, or we could leave a cancelled-but-unreplaced OCO on the
+        # exchange. The section must always run to completion.
         cancel_result = self.provider.cancel_oco(self.order_list_id)
 
         try:
