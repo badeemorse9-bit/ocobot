@@ -241,3 +241,8 @@ State / Error
 # المرحلة 14 — LIVE
 
 يبقى معطلًا حتى اعتماد كل الأدلة السابقة صراحة.
+
+
+## Canonical Dynamic Monitor completion
+
+Local implementation is complete: asynchronous start/live-price handling, serialized coalesced replacements, exact-selection lifecycle stops, explicit ABORTED_NO_CREATE versus FAILED_NEEDS_ATTENTION, result display, and orderListId rollover. Legacy AutoTrail is unreachable from the default UI and LIVE remains disabled. Local compile and 53-test suite pass. Remaining gates are automated Testnet acceptance and human safety/code review; see RELEASE_CHECKLIST.md.

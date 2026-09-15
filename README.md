@@ -23,7 +23,12 @@ The selected OCO remains untouched while the user edits a local draft. Only `Act
 ## Safety boundaries
 
 - No withdrawal or transfer permissions are needed by the design.
-- No automatic trading decisions.
+- Dynamic monitoring is opt-in for one exact selected `orderListId`; start and replacements run asynchronously.
+- Live prices are serialized and coalesced while a replacement is in flight, preventing overlapping cancel/create calls.
+- Selection, provider/mode changes, Stop, and window close stop monitoring and unsubscribe safely.
+- Successful replacement rolls monitoring to the returned `orderListId` and displays the new reference.
+- Pre-cancel failures are `ABORTED_NO_CREATE`; post-cancel creation failures are `FAILED_NEEDS_ATTENTION` with no blind retry.
+- LIVE remains disabled; local validation performs no network trades and uses no credentials.
 - No background cancellation while editing.
 - No global "replace all" operation.
 - Before activation, re-query/verify the selected OCO is still active and still has the same identity.

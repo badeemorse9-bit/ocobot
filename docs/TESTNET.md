@@ -76,3 +76,8 @@ The controlled cancel/create acceptance test has now passed with two open OCOs:
 
 These IDs and timings are Testnet evidence only and may disappear after a
 Testnet reset. They are not production guarantees.
+
+
+## Release-gate status
+
+Local compile and the 53-test suite pass without credentials or network trades. Automated disposable-order Testnet acceptance and human safety review remain pending. Do not enable LIVE; follow RELEASE_CHECKLIST.md.

@@ -29,7 +29,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ocobot.application.auto_trail import AutoTrailEngine, AutoTrailSettings
+from ocobot.application.monitor_coordinator import (
+    ABORTED_NO_CREATE,
+    DynamicMonitorCoordinator,
+    MonitorReplacementResult,
+)
 from ocobot.application.services import OCOEditorService
 from ocobot.domain.validation import highest_sell_stop_candidate
 from ocobot.providers.base import OCOProvider
@@ -37,6 +41,7 @@ from ocobot.providers.binance import BinanceOCOProvider
 from ocobot.providers.paper import PaperOCOProvider
 from ocobot.providers.sample_data import sample_ocos
 from ocobot.application.dynamic_stop import dynamic_sell_stop_limit, dynamic_sell_stop_price
+from ocobot.ui.dynamic_monitor_panel import DynamicMonitorPanel
 
 
 APP_STYLE = """
@@ -133,7 +138,11 @@ class MainWindow(QMainWindow):
         self.provider: OCOProvider = self._new_paper_provider()
         self.service = OCOEditorService(self.provider)
         self.unsubscribe: Callable[[], None] | None = None
-        self.trail: AutoTrailEngine | None = None
+        self.monitor_coordinator: DynamicMonitorCoordinator | None = None
+        self._monitor_generation = 0
+        self._monitor_future = None
+        self._monitor_pending_price: Decimal | None = None
+        self._monitor_workers = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocobot-monitor")
         self._tick_cache: dict[str, Decimal] = {}
         self._building_table = False
         self._editor_guard = False
@@ -174,7 +183,7 @@ class MainWindow(QMainWindow):
         hint.setObjectName("sidehint")
         side.addWidget(hint)
         side.addSpacing(16)
-        nav_specs = [("الرئيسية", 0), ("الأوامر", 1), ("التتبع", 2), ("Testnet", 3), ("المراقبة", 4), ("الإعدادات", 5)]
+        nav_specs = [("الرئيسية", 0), ("الأوامر", 1), ("المراقبة الديناميكية", 2), ("Testnet", 3), ("الإعدادات", 4)]
         for text, index in nav_specs:
             button = QPushButton(text)
             button.setObjectName("nav")
@@ -197,7 +206,8 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self.stack, 1)
         outer_layout.addWidget(content, 1)
 
-        self.pages = [self._build_home_page(), self._build_orders_page(), self._build_trail_page(), self._build_testnet_page(), self._build_monitor_page(), self._build_settings_page()]
+        # Canonical V1 path: safe editor plus Dynamic Monitor. Legacy AutoTrail is not constructed.
+        self.pages = [self._build_home_page(), self._build_orders_page(), self._build_monitor_page(), self._build_testnet_page(), self._build_settings_page()]
         for page in self.pages:
             self.stack.addWidget(page)
 
@@ -309,39 +319,6 @@ class MainWindow(QMainWindow):
         page.setLayout(root)
         return page
 
-    def _build_trail_page(self) -> QWidget:
-        page = QWidget()
-        root = self._page_header("التتبع", "تتبع صعود فقط — لا يرسل استبدالًا متتابعًا عند قفزة كبيرة")
-        settings = QGroupBox("إعدادات التتبع")
-        grid = QGridLayout(settings)
-        self.trigger_edit = QLineEdit("1.00")
-        self.tp_move_edit = QLineEdit("1.00")
-        self.sl_move_edit = QLineEdit("0.50")
-        for edit in (self.trigger_edit, self.tp_move_edit, self.sl_move_edit):
-            edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        for i, (label, edit) in enumerate([("Trigger Rise %", self.trigger_edit), ("TP Move %", self.tp_move_edit), ("SL Move %", self.sl_move_edit)]):
-            grid.addWidget(QLabel(label), 0, i * 2)
-            grid.addWidget(edit, 0, i * 2 + 1)
-        self.trail_enable = QPushButton("تشغيل التتبع")
-        self.trail_enable.setObjectName("success")
-        self.trail_enable.clicked.connect(self._toggle_trail)
-        grid.addWidget(self.trail_enable, 1, 0, 1, 2)
-        self.trail_state = QLabel("متوقف")
-        self.trail_state.setStyleSheet("font-weight:800;")
-        grid.addWidget(self.trail_state, 1, 2, 1, 4)
-        self.anchor_label = QLabel("المرجع: —    التالي: —    حي: —")
-        self.anchor_label.setObjectName("muted")
-        grid.addWidget(self.anchor_label, 2, 0, 1, 6)
-        root.addWidget(settings)
-        behavior = QGroupBox("سلوك الاستبدال")
-        bl = QVBoxLayout(behavior)
-        bl.addWidget(QLabel("السعر اللحظي → Trigger → قراءة OCO الحالية → إلغاء OCO المحدد فقط → إنشاء البديل → تأكيد orderListId الجديد."))
-        bl.addWidget(QLabel("عند القفز فوق عدة Triggers: تنفيذ استبدال واحد مضبوط، ثم يصبح السعر الأحدث هو المرجع الجديد."))
-        root.addWidget(behavior)
-        root.addStretch(1)
-        page.setLayout(root)
-        return page
-
     def _build_testnet_page(self) -> QWidget:
         page = QWidget()
         root = self._page_header("Testnet", "تجهيز شراء Testnet وإنشاء OCO بعد الحصول على الكمية المنفذة")
@@ -368,6 +345,10 @@ class MainWindow(QMainWindow):
         metrics.addWidget(self._metric_card("أعلى Stop صالح للعرض", "monitor_max_stop"), 1)
         metrics.addWidget(self._metric_card("Tick Size", "monitor_tick"), 1)
         root.addLayout(metrics)
+        self.dynamic_monitor_panel = DynamicMonitorPanel()
+        self.dynamic_monitor_panel.monitoring_requested.connect(self._start_dynamic_monitor)
+        self.dynamic_monitor_panel.monitoring_stopped.connect(self._stop_dynamic_monitor)
+        root.addWidget(self.dynamic_monitor_panel)
         connection = QGroupBox("المصدر والحالة")
         cg = QGridLayout(connection)
         self.connection = QLabel("● PAPER")
@@ -376,7 +357,12 @@ class MainWindow(QMainWindow):
         self.feed_state.setStyleSheet("font-weight:800;")
         self.last_update = QLabel("—")
         self.selected_status = QLabel("—")
-        for r, (label, widget) in enumerate([("الاتصال", self.connection), ("تغذية السعر", self.feed_state), ("آخر تحديث", self.last_update), ("حالة OCO", self.selected_status)]):
+        self.monitor_order_id = QLabel("—")
+        self.monitor_reference = QLabel("—")
+        self.monitor_trigger = QLabel("—")
+        self.monitor_outcome = QLabel("IDLE")
+        fields = [("الاتصال", self.connection), ("تغذية السعر", self.feed_state), ("آخر تحديث", self.last_update), ("حالة OCO", self.selected_status), ("orderListId المحدد", self.monitor_order_id), ("سعر البدء", self.monitor_reference), ("سعر التشغيل", self.monitor_trigger), ("النتيجة", self.monitor_outcome)]
+        for r, (label, widget) in enumerate(fields):
             cg.addWidget(QLabel(label), r, 0)
             cg.addWidget(widget, r, 1)
         root.addWidget(connection)
@@ -459,7 +445,7 @@ class MainWindow(QMainWindow):
 
     def _switch_mode(self, mode: str) -> None:
         if mode == "PAPER":
-            self._disable_trail()
+            self._stop_dynamic_monitor()
             self._stop_price_subscription()
             old = self.provider
             self.provider = self._new_paper_provider()
@@ -482,7 +468,7 @@ class MainWindow(QMainWindow):
         if not self.testnet_api_key or not self.testnet_api_secret:
             self._open_credentials()
             return
-        self._disable_trail()
+        self._stop_dynamic_monitor()
         self._stop_price_subscription()
         self.testnet_status.setText("جاري الاتصال…")
         self.statusBar().showMessage("جارٍ الاتصال بـ Binance Testnet…")
@@ -514,6 +500,14 @@ class MainWindow(QMainWindow):
         if not isinstance(payload, tuple) or not payload:
             return
         kind = payload[0]
+        if kind == "monitor_start":
+            _, generation, provider, order_id, future = payload
+            self._finish_monitor_start(generation, provider, order_id, future)
+            return
+        if kind == "monitor_price":
+            _, generation, provider, coordinator, future = payload
+            self._finish_monitor_price(generation, provider, coordinator, future)
+            return
         if kind == "connect":
             _, result = payload
             ok, data = result
@@ -522,6 +516,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "TESTNET", f"تعذر الاتصال:\n{data}")
                 return
             provider, orders = data
+            self._stop_dynamic_monitor()
+            self._stop_price_subscription()
             old = self.provider
             self.provider = provider
             self.service = OCOEditorService(provider)
@@ -620,7 +616,7 @@ class MainWindow(QMainWindow):
             order_id = int(self.orders.item(rows[0].row(), 0).text())
         except (AttributeError, ValueError):
             return
-        self._disable_trail()
+        self._stop_dynamic_monitor()
         self._stop_price_subscription()
         self._selected_id = order_id
         provider = self.provider
@@ -646,6 +642,9 @@ class MainWindow(QMainWindow):
         self.home_trail.setText("متوقف")
         self.dynamic_stop_button.setEnabled(True)
         self.activate_btn.setEnabled(True)
+        self.dynamic_monitor_panel.set_enabled(True)
+        self.monitor_order_id.setText(str(draft.selection.order_list_id))
+        self.monitor_outcome.setText("IDLE")
         self._update_home_from_draft(draft)
 
     def _update_home_from_draft(self, draft: Any) -> None:
@@ -743,6 +742,9 @@ class MainWindow(QMainWindow):
             if dynamic is not None:
                 self.editor_hint.setText(f"الديناميكي الآن ({self.dynamic_stop_percent}%): {dynamic:f}")
         self.feed_state.setText("Live")
+        if tick:
+            self.dynamic_monitor_panel.set_live_price(price, tick)
+        self._queue_monitor_price(price)
         self._update_home_metrics(self.orders.rowCount())
 
     def _update_monitor_labels(self) -> None:
@@ -754,59 +756,102 @@ class MainWindow(QMainWindow):
         self.home_open_count.setText(str(count))
         self.home_selected.setText(str(self._selected_id) if self._selected_id else "—")
         self.home_state.setText(self.service.state.value if self.service else "IDLE")
-        self.home_trail.setText("نشط" if self.trail and self.trail.snapshot().enabled else "متوقف")
+        self.home_trail.setText("نشط" if self.monitor_coordinator else "متوقف")
 
-    def _toggle_trail(self) -> None:
-        if self.trail and self.trail.snapshot().enabled:
-            self._disable_trail()
+    def _start_dynamic_monitor(self, settings: object) -> None:
+        if not self.service.selection or self._selected_id is None:
+            self.dynamic_monitor_panel.set_monitoring_state(False, "Select an OCO first")
             return
-        if not self.service.original:
-            QMessageBox.information(self, "التتبع", "اختر OCO أولًا.")
+        self._stop_dynamic_monitor()
+        generation, provider, order_id = self._monitor_generation, self.provider, self._selected_id
+        self.dynamic_monitor_panel.set_monitoring_state(True, "Starting…")
+        self.monitor_outcome.setText("STARTING")
+
+        def start_work():
+            coordinator = DynamicMonitorCoordinator(provider, order_id, settings)
+            coordinator.start()
+            return coordinator
+
+        future = self._monitor_workers.submit(start_work)
+        self._monitor_future = future
+        future.add_done_callback(lambda f: self._worker_bridge.finished.emit(("monitor_start", generation, provider, order_id, f)))
+
+    def _finish_monitor_start(self, generation: int, provider: OCOProvider, order_id: int, future: Any) -> None:
+        if generation != self._monitor_generation or provider is not self.provider or order_id != self._selected_id:
             return
         try:
-            settings = AutoTrailSettings.parse(self.trigger_edit.text(), self.tp_move_edit.text(), self.sl_move_edit.text())
-            live = self.provider.get_last_price(self.service.original.symbol)
-            self.trail = AutoTrailEngine(self.provider, event=self._trail_event, finished=self._trail_finished, price=self._on_price)
-            snap = self.trail.enable(self.service.original, settings, live)
-            self.trail_state.setText("ACTIVE")
-            self.trail_enable.setText("إيقاف التتبع")
-            self.anchor_label.setText(f"المرجع: {snap.anchor_price}    التالي: {snap.next_trigger}    حي: {snap.latest_price}")
-            self.home_trail.setText("نشط")
-            self._show_page(2)
+            coordinator = future.result()
         except Exception as exc:
-            QMessageBox.warning(self, "التتبع", str(exc))
+            self._monitor_future = None
+            self.dynamic_monitor_panel.set_monitoring_state(False, f"Start failed: {exc}")
+            self.monitor_outcome.setText(ABORTED_NO_CREATE)
+            return
+        self.monitor_coordinator, self._monitor_future = coordinator, None
+        reference = coordinator.engine.reference_price
+        trigger = reference * (Decimal("1") + coordinator.engine.settings.trigger_rise_percent / Decimal("100"))
+        self.monitor_reference.setText(f"{reference:f}")
+        self.monitor_trigger.setText(f"{trigger:f}")
+        self.monitor_order_id.setText(str(order_id))
+        self.monitor_outcome.setText("MONITORING")
+        self.dynamic_monitor_panel.set_monitoring_state(True, "Monitoring Active")
 
-    def _disable_trail(self) -> None:
-        if self.trail:
-            try:
-                self.trail.disable()
-            except Exception:
-                pass
-        self.trail = None
-        if hasattr(self, "trail_state"):
-            self.trail_state.setText("متوقف")
-        if hasattr(self, "trail_enable"):
-            self.trail_enable.setText("تشغيل التتبع")
+    def _queue_monitor_price(self, price: Decimal) -> None:
+        coordinator = self.monitor_coordinator
+        if coordinator is None:
+            return
+        if self._monitor_future is not None:
+            self._monitor_pending_price = price
+            return
+        generation, provider = self._monitor_generation, self.provider
+        future = self._monitor_workers.submit(coordinator.on_price, price)
+        self._monitor_future = future
+        future.add_done_callback(lambda f: self._worker_bridge.finished.emit(("monitor_price", generation, provider, coordinator, f)))
+
+    def _finish_monitor_price(self, generation: int, provider: OCOProvider, coordinator: DynamicMonitorCoordinator, future: Any) -> None:
+        if generation != self._monitor_generation or provider is not self.provider or coordinator is not self.monitor_coordinator:
+            return
+        self._monitor_future = None
+        try:
+            result = future.result()
+        except Exception as exc:
+            result = MonitorReplacementResult(False, str(exc), coordinator.order_list_id, state=ABORTED_NO_CREATE)
+        if result is not None:
+            self._apply_monitor_result(result)
+        pending, self._monitor_pending_price = self._monitor_pending_price, None
+        if pending is not None and self.monitor_coordinator is coordinator:
+            self._queue_monitor_price(pending)
+
+    def _apply_monitor_result(self, result: MonitorReplacementResult) -> None:
+        self.monitor_outcome.setText(result.state)
+        self._trail_event(result.state, result.message)
+        if result.success and result.new_order_list_id is not None:
+            self._selected_id = result.new_order_list_id
+            self.monitor_order_id.setText(str(result.new_order_list_id))
+            if result.latest_price is not None:
+                self.monitor_reference.setText(f"{result.latest_price:f}")
+            self._refresh_orders(False)
+            self.dynamic_monitor_panel.set_monitoring_state(True, "Replacement succeeded; monitoring continues")
+        else:
+            self.monitor_coordinator = None
+            self.dynamic_monitor_panel.set_monitoring_state(False, result.state)
+
+    def _stop_dynamic_monitor(self) -> None:
+        self._monitor_generation += 1
+        coordinator, self.monitor_coordinator = self.monitor_coordinator, None
+        self._monitor_pending_price = None
+        self._monitor_future = None
+        if coordinator is not None:
+            coordinator.stop()
+        if hasattr(self, "dynamic_monitor_panel"):
+            enabled = bool(self.service.selection and self._selected_id)
+            self.dynamic_monitor_panel.set_enabled(enabled)
+            self.dynamic_monitor_panel.set_monitoring_state(False, "Ready" if enabled else "Select an OCO first")
 
     def _trail_event(self, kind: str, details: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         line = f"{stamp} • {kind} • {details}"
         self.event_log.setText(line + "\n" + self.event_log.text())
         self.home_events.setText(line + "\n" + self.home_events.text())
-
-    def _trail_finished(self, ok: bool, message: str, result: dict[str, Any] | None) -> None:
-        if ok:
-            self._trail_event("TRAIL_SUCCESS", message)
-            self._refresh_orders(False)
-            new_id = result.get("orderListId") if result else None
-            if new_id:
-                self._selected_id = int(new_id)
-            self.trail_state.setText("ACTIVE — تم استبدال OCO")
-        else:
-            self._trail_event("TRAIL_STOPPED", message)
-            self.trail_state.setText("متوقف — FAILED_NEEDS_ATTENTION")
-            self.trail_enable.setText("تشغيل التتبع")
-            self._show_page(4)
 
     def _activate(self) -> None:
         if not self.service.draft:
@@ -854,6 +899,11 @@ class MainWindow(QMainWindow):
         self.monitor_max_stop.setText("—")
         self.monitor_tick.setText("—")
         self.selected_status.setText("—")
+        self.dynamic_monitor_panel.set_enabled(False)
+        self.monitor_order_id.setText("—")
+        self.monitor_reference.setText("—")
+        self.monitor_trigger.setText("—")
+        self.monitor_outcome.setText("IDLE")
         self.home_symbol.setText("—")
         self.home_tp.setText("—")
         self.home_sl.setText("—")
@@ -862,7 +912,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._stop_price_subscription()
-        self._disable_trail()
+        self._stop_dynamic_monitor()
+        try:
+            self._monitor_workers.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         try:
             self._workers.shutdown(wait=False, cancel_futures=True)
         except Exception:

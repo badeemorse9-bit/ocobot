@@ -1,7 +1,11 @@
 from decimal import Decimal
 
 from ocobot.application.dynamic_monitor import DynamicMonitorSettings
-from ocobot.application.monitor_coordinator import DynamicMonitorCoordinator
+from ocobot.application.monitor_coordinator import (
+    ABORTED_NO_CREATE,
+    FAILED_NEEDS_ATTENTION,
+    DynamicMonitorCoordinator,
+)
 from ocobot.domain.models import OCOOrder, OrderLeg
 
 
@@ -92,6 +96,39 @@ def test_failed_create_stops_monitoring_without_retry() -> None:
     second = coordinator.on_price(Decimal("0.06000"))
 
     assert first is not None and not first.success
+    assert first.state == FAILED_NEEDS_ATTENTION
     assert second is None
     assert attempts["n"] == 1
     provider.place_oco = original_place
+
+
+def test_pre_cancel_validation_failure_is_aborted_without_create() -> None:
+    provider = FakeProvider()
+    coordinator = DynamicMonitorCoordinator(
+        provider, 100, DynamicMonitorSettings.from_values("1", "4", "2")
+    )
+    coordinator.start()
+    provider._oco = provider._make_oco(999)
+
+    result = coordinator.on_price(Decimal("0.05050"))
+
+    assert result is not None and not result.success
+    assert result.state == ABORTED_NO_CREATE
+    assert provider.cancelled == []
+    assert provider.placed == []
+
+
+def test_successful_replacement_rolls_over_and_replaces_new_id_next() -> None:
+    provider = FakeProvider()
+    coordinator = DynamicMonitorCoordinator(
+        provider, 100, DynamicMonitorSettings.from_values("1", "4", "2")
+    )
+    coordinator.start()
+    provider.price = Decimal("0.05120")
+    first = coordinator.on_price(Decimal("0.05050"))
+    provider.price = Decimal("0.05200")
+    second = coordinator.on_price(Decimal("0.05172"))
+
+    assert first is not None and first.new_order_list_id == 200
+    assert second is not None and second.old_order_list_id == 200
+    assert provider.cancelled == [100, 200]

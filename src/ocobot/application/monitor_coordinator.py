@@ -5,6 +5,11 @@ from decimal import Decimal
 from threading import Lock
 from typing import Any
 
+
+ABORTED_NO_CREATE = "ABORTED_NO_CREATE"
+FAILED_NEEDS_ATTENTION = "FAILED_NEEDS_ATTENTION"
+SUCCESS = "SUCCESS"
+
 from ocobot.application.dynamic_monitor import DynamicMonitorSettings, calculate_reposition_levels
 from ocobot.application.monitor_engine import DynamicMonitorEngine, RepositionEvent
 from ocobot.domain.models import OCOOrder
@@ -20,6 +25,7 @@ class MonitorReplacementResult:
     latest_price: Decimal | None = None
     cancel_result: dict[str, Any] | None = None
     create_result: dict[str, Any] | None = None
+    state: str = SUCCESS
 
 
 class DynamicMonitorCoordinator:
@@ -60,7 +66,10 @@ class DynamicMonitorCoordinator:
                 self.engine.fail_replacement()
                 self._failed = True
                 self._monitoring = False
-                return MonitorReplacementResult(False, str(exc), self.order_list_id)
+                state = FAILED_NEEDS_ATTENTION if getattr(exc, "_ocobot_cancelled", False) else ABORTED_NO_CREATE
+                return MonitorReplacementResult(
+                    False, str(exc), self.order_list_id, state=state
+                )
 
             self.order_list_id = result.new_order_list_id or self.order_list_id
             self.engine.complete_replacement(result.latest_price)
@@ -78,13 +87,17 @@ class DynamicMonitorCoordinator:
         self._ensure_sell_oco(current)
         cancel_result = self.provider.cancel_oco(self.order_list_id)
 
-        latest_price = self.provider.get_last_price(self.symbol)
-        levels = calculate_reposition_levels(latest_price, self.engine.settings, self.tick_size)
-        payload = self._build_payload(current, levels)
-        create_result = self.provider.place_oco(payload)
-        new_order_list_id = create_result.get("orderListId")
-        if not new_order_list_id:
-            raise RuntimeError("Replacement was created without an orderListId")
+        try:
+            latest_price = self.provider.get_last_price(self.symbol)
+            levels = calculate_reposition_levels(latest_price, self.engine.settings, self.tick_size)
+            payload = self._build_payload(current, levels)
+            create_result = self.provider.place_oco(payload)
+            new_order_list_id = create_result.get("orderListId")
+            if not new_order_list_id:
+                raise RuntimeError("Replacement was created without an orderListId")
+        except Exception as exc:
+            setattr(exc, "_ocobot_cancelled", True)
+            raise
 
         return MonitorReplacementResult(
             True,
