@@ -1,5 +1,5 @@
 # AGENT STATE
-> Last updated by: R4 closure checkpoint | Repository baseline: `80dcdb7`
+> Last updated by: R5 closure checkpoint | Repository baseline: `80dcdb7` (+ working-tree add: tests/test_stop_token.py, uncommitted)
 
 ## Project Goal
 Binance Spot OCO safe editor: monitor, edit, and atomically replace ONE selected OCO order by `orderListId`, with safe async lifecycle and no UI freeze on provider teardown.
@@ -18,16 +18,32 @@ Python 3.11, PySide6/Qt6, httpx, websockets, pytest. Exchange integration: Binan
 - Full offline suite: **66 passed** in 7.30s, 0 failures, 0 errors.
 - `git diff --check`: clean before commit.
 - LIVE remains gated.
+- R5 cooperative stop-token regression added in `tests/test_stop_token.py`: 4 tests (2 parametrized cases x 2). Verifies a signalled cooperative stop token resolves the in-flight monitor future within the 2.0s R4 drain bound with no cancel/create mutation, and that `MainWindow._drain_monitor_future` then tears down the old provider immediately.
+- No change was required to `src/ocobot/ui/main_window.py`: the captured-future + cooperative-stop + bounded-drain path was already correct; R5 verified it and now regression-guards it.
+- Full offline suite now **70 passed** (baseline 66 + 4 new), 0 failures, 0 errors.
 
 ## R4 — CLOSED WITH VERIFICATION
 R4 is closed because implementation, targeted regression coverage, and the offline suite all passed at the checkpoint above.
 
 One targeted design consideration remains for future UI-focused review only: the deferred `on_drained` callback may execute from the future's worker thread; verify whether provider teardown must be marshalled to the Qt/UI thread before making any unrelated change.
 
+## R5 — CLOSED WITH VERIFICATION
+R5 is closed: parameterised regression coverage was added and the offline suite is green.
+
+- Implementation: `tests/test_stop_token.py` (new).
+  - `test_stop_token_resolves_monitor_future_within_2s[none|get_oco]`: submits the monitor future on a single-worker `ThreadPoolExecutor` (mirrors `MainWindow._monitor_workers`), signals the coordinator's cooperative stop token, and asserts the future resolves within the 2.0s R4 drain bound with `result is None or result.state == ABORTED_NO_CREATE`, `provider.cancelled == []`, `provider.placed == []`, `coordinator._failed is False`.
+  - `test_drain_closes_old_provider_after_stop_token[none|get_oco]`: after the stop token resolves the future, `MainWindow._drain_monitor_future(future, close, timeout=2.0)` runs old-provider teardown immediately (no deferral) with no cancel/create overlap.
+- `main_window.py` behaviour verified — no code change required. `_switch_mode` captures the in-flight future before `_stop_dynamic_monitor` clears it, signals the cooperative stop, and drains via `_drain_monitor_future`. NEXT.json had listed `main_window.py` in files_to_touch as a possible tweak; none was needed.
+- Verification actually run at this checkpoint:
+  - Targeted: `pytest tests/test_stop_token.py -p no:cacheprovider -v` -> **4 passed** (~3.2s).
+  - Full offline suite: `pytest --ignore=tests/test_testnet_acceptance.py -p no:cacheprovider` -> **70 passed** (~44s), 0 failures / 0 errors.
+- No unresolved R5 correctness/safety/lifecycle defect. The previously noted "deferred `on_drained` callback may run on the future's worker thread" item remains a future UI-review consideration only (R4-closed), not an R5 blocker. LIVE remains gated.
+- The new test is in the working tree (uncommitted); this checkpoint does not commit it.
+
 ## Engineering Plan
 The high-level plan was established by the previous Architect (Sonnet) and is the baseline for Opus execution. Do not replace or reorder it during ordinary execution.
 
-### R5 — CURRENT TASK: Cooperative stop regression
+### R5 — DONE (Cooperative stop regression) — current pointer: Gate 1 (BLOCKED: awaiting Binance Testnet credentials)
 - Use the existing R5 scope from `NEXT.json`.
 - Add/complete the targeted stop-token regression coverage and verify the relevant `main_window.py` behavior.
 - Acceptance: regression coverage passes and the offline suite remains green.

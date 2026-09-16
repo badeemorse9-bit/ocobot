@@ -1,35 +1,36 @@
 {
-  "next_task": "R5: add a parameterised pytest regression test in tests/test_stop_token.py that starts a monitor future, signals the stop token, and asserts the future resolves within 2s (regression guard for the R4 provider-close drain); verify behaviour in src/ocobot/ui/main_window.py",
-  "files_to_touch": [
-    "tests/test_stop_token.py",
-    "src/ocobot/ui/main_window.py"
-  ],
+  "next_task": "Gate 1: run tests/test_testnet_acceptance.py against Binance Spot Testnet with real BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET credentials. BLOCKED - awaiting credentials/network environment; cannot proceed autonomously. Do not modify the acceptance test to make it pass. Do not enable LIVE.",
+  "files_to_touch": [],
   "dont_touch": [
+    "tests/test_testnet_acceptance.py",
     "src/ocobot/monitor/",
     "src/ocobot/providers/",
     "pyproject.toml",
     "docs/",
     "scripts/",
-    "README.md",
-    "AGENT_STATE.md"
+    "README.md"
   ],
-  "tests": "66 passed (pytest --ignore=tests/test_testnet_acceptance.py -p no:cacheprovider)",
-  "last_done": "R4: fixed provider-close race by deferring old provider teardown until the in-flight monitor future actually completes; added and passed 4 direct regression tests",
-  "plan_position": "R5 of 6 milestones",
+  "tests": "70 passed (pytest --ignore=tests/test_testnet_acceptance.py -p no:cacheprovider)",
+  "last_done": "R5: added parameterised cooperative stop-token regression test tests/test_stop_token.py (4 tests) guarding the R4 provider-close drain; verified MainWindow._drain_monitor_future needs no change; full offline suite 70 passed",
+  "plan_position": "R5 of 6 milestones CLOSED; next is Gate 1",
   "gates_remaining": [
-    "Gate 1 (testnet credentials required)",
+    "Gate 1 (testnet credentials required) - BLOCKED: awaiting credentials",
     "Gate 2 (human safety review)"
   ],
   "definition_of_done": "pytest full suite 0 failures + UI mode switch <3s no freeze + SAFETY_REVIEW.md signed off + LIVE mode behind QMessageBox confirmation dialog",
+  "blocked": {
+    "gate_1": "Requires real Binance Spot Testnet credentials (BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET) and network access; cannot proceed autonomously. Safe read-only connectivity check available via scripts/testnet_read_probe.py.",
+    "gate_2": "Requires human safety review sign-off (SAFETY_REVIEW.md). LIVE stays disabled until Gate 1 + Gate 2 are both complete."
+  },
   "context": {
     "project": "Binance Spot OCO safe editor",
     "stack": "Python 3.11 / PySide6 / httpx / websockets / pytest",
-    "r4_done_detail": "src/ocobot/ui/main_window.py _switch_mode captures self._monitor_future before _stop_dynamic_monitor clears it, stops monitoring, creates the new paper provider so the UI can proceed, and routes old-provider teardown through _drain_monitor_future. If the future is already finished/cancelled/errored, teardown occurs immediately; if it is still running after the bounded timeout, teardown is deferred with a done callback until the future completes.",
-    "r4_impl_note": "_monitor_future is a concurrent.futures ThreadPoolExecutor future, not an asyncio future. The implementation therefore uses future.cancel()+future.result(timeout=2.0), and on TimeoutError registers a completion callback instead of closing the provider while the worker is active.",
-    "r4_verification": "4 passed in 1.14s for tests/test_switch_mode_provider_close.py; 66 passed in 7.30s for the full offline suite; 0 failures and 0 errors.",
-    "r5_hint": "Add or complete the planned cooperative-stop regression test and verify the relevant main_window behavior; do not redesign the overall plan.",
-    "baseline_tests": 66,
+    "r5_done_detail": "tests/test_stop_token.py submits coordinator.on_price on a single-worker ThreadPoolExecutor (mirrors MainWindow._monitor_workers), signals DynamicMonitorCoordinator's cooperative stop token (threading.Event + _monitoring flag), and asserts the future resolves within the 2.0s R4 drain bound with a clean ABORTED_NO_CREATE/None and no cancel/create mutation. A companion parametrized test feeds the resolved future to MainWindow._drain_monitor_future and asserts the old provider is closed immediately (no deferral).",
+    "r5_main_window_note": "No change to src/ocobot/ui/main_window.py was required. _switch_mode captures the in-flight future before _stop_dynamic_monitor clears it, signals the cooperative stop, and drains via _drain_monitor_future (concurrent.futures cancel()+result(timeout=2.0); on TimeoutError defers close via add_done_callback). R5 verified and now regression-guards this path.",
+    "r5_verification": "4 passed in ~3.2s for tests/test_stop_token.py; 70 passed in ~44s for the full offline suite (baseline 66 + 4 new); 0 failures/errors.",
+    "baseline_tests": 70,
     "testnet_acceptance_excluded_from_ci": true,
-    "live_mode_status": "disabled - requires Gate 1 + Gate 2 before enabling"
+    "live_mode_status": "disabled - requires Gate 1 + Gate 2 before enabling",
+    "working_tree_note": "tests/test_stop_token.py added in working tree (uncommitted)."
   }
 }
