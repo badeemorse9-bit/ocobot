@@ -1,204 +1,85 @@
 # AGENT STATE
-> Last updated by: executor-efficiency-policy pass | Repository baseline: `a933ba9`
-
----
+> Last updated by: R4 closure checkpoint | Repository baseline: `80dcdb7`
 
 ## Project Goal
-Build a Binance Spot OCO safe editor that lets a user monitor, edit, and atomically replace ONE selected OCO order by `orderListId` — without freezing the UI on mode switches or provider teardown.
-
----
+Binance Spot OCO safe editor: monitor, edit, and atomically replace ONE selected OCO order by `orderListId`, with safe async lifecycle and no UI freeze on provider teardown.
 
 ## Stack
-| Layer | Technology |
-|---|---|
-| Language | Python 3.11 |
-| UI Framework | PySide6 (Qt6) |
-| HTTP client | httpx (async) |
-| WebSocket client | websockets |
-| Test runner | pytest |
-| Exchange integration | Binance Spot REST + WebSocket (paper + testnet + live) |
+Python 3.11, PySide6/Qt6, httpx, websockets, pytest. Exchange integration: Binance Spot REST/WebSocket with Paper + Testnet + gated LIVE.
 
----
+## Verified Current State
+- R1 cooperative monitor stop token implemented.
+- R2 rollover rehydration implemented and unit-covered.
+- R3 symbol guard implemented at coordinator + UI layers.
+- R4 provider-close race fix implemented in `src/ocobot/ui/main_window.py` and committed in `80dcdb7`.
+- R4 behavior: capture the in-flight `ThreadPoolExecutor` future before clearing it; signal cooperative stop; wait up to the bounded timeout; if still running, defer old-provider teardown to future completion so `old.close()` cannot overlap the running task.
+- R4 regression coverage: `tests/test_switch_mode_provider_close.py`.
+- Targeted R4 regression test: **4 passed** in 1.14s.
+- Full offline suite: **66 passed** in 7.30s, 0 failures, 0 errors.
+- `git diff --check`: clean before commit.
+- LIVE remains gated.
 
-## What's Working
-- R1 stop token exists and is intended to make monitor shutdown cooperative.
-- R2 rollover rehydration exists and is covered by unit tests from the prior implementation work.
-- R3 symbol guard exists at both the coordinator and UI layers.
-- R4 provider-close drain was implemented in commit `67ec2d7` in `src/ocobot/ui/main_window.py`.
-- Dynamic Monitor UI and Paper provider are in place.
-- Testnet adapter is wired in; credentials are read from environment variables / `.env` and are not hardcoded.
-- LIVE mode remains gated.
+## R4 — CLOSED WITH VERIFICATION
+R4 is closed because implementation, targeted regression coverage, and the offline suite all passed at the checkpoint above.
 
-### Test-count note
-`NEXT.json` records **62 passed** as the current verified offline baseline immediately after the R4 handoff. Earlier documentation reported 67, creating a conflicting/stale count. Do not treat either number as newly verified until the appropriate test run is performed. The next executor must record the actual result.
+One targeted design consideration remains for future UI-focused review only: the deferred `on_drained` callback may execute from the future's worker thread; verify whether provider teardown must be marshalled to the Qt/UI thread before making any unrelated change.
 
----
+## Engineering Plan
+The high-level plan was established by the previous Architect (Sonnet) and is the baseline for Opus execution. Do not replace or reorder it during ordinary execution.
 
-## Current Risks / Unverified Gates
-- **R4 verification:** the provider-close drain implementation exists, but the repository has not yet established a fresh test result proving its intended timing/lifecycle behavior after commit `67ec2d7`.
-- **Gate 1 — Testnet acceptance:** blocked on real Binance Testnet credentials. `tests/test_testnet_acceptance.py` is not a CI gate and must be run manually with valid credentials.
-- **Gate 2 — human safety review:** not done. LIVE mode must remain disabled until the human review is completed.
-- Do not enable LIVE merely because offline tests are green.
-
----
-
-## Full Engineering Plan
-The plan was established by the architecture/planning pass and is the default execution direction for Opus.
-
-### R4 — Provider-close race
-Implemented in `67ec2d7`. The code captures the in-flight `ThreadPoolExecutor` future before clearing the monitor reference, signals the monitor stop, performs a bounded drain, then closes the old provider.
-
-**Stage closure rule:** R4 is NOT considered complete merely because the code change exists. It must be verified against its acceptance criteria and regression coverage. If verification exposes a correctness or lifecycle defect, remain on R4, fix it, and verify again before advancing.
-
-### R5 — Cooperative stop regression (CURRENT TASK)
-- Add the targeted regression test described by `NEXT.json`.
-- Verify the current `main_window.py` behavior relevant to the monitor future.
-- Acceptance: the new regression test passes and the full offline suite remains green.
+### R5 — CURRENT TASK: Cooperative stop regression
+- Use the existing R5 scope from `NEXT.json`.
+- Add/complete the targeted stop-token regression coverage and verify the relevant `main_window.py` behavior.
+- Acceptance: regression coverage passes and the offline suite remains green.
 
 ### Gate 1 — Testnet acceptance
-- Run `tests/test_testnet_acceptance.py` with real Binance Testnet credentials.
-- Do not modify the acceptance test merely to make it pass.
+Run `tests/test_testnet_acceptance.py` with real Binance Testnet credentials. Do not modify the acceptance test just to make it pass.
 
 ### Gate 2 — Human safety review
-- Human review of the LIVE order submission path.
-- LIVE remains disabled until this review is explicitly completed.
+Human review of the LIVE order-submission path. LIVE stays disabled until explicitly approved.
 
 ### Final — LIVE enablement
-Only after Gate 1 and Gate 2 are complete: review the live path, add/retain explicit confirmation, and then consider enabling LIVE.
+Only after Gate 1 and Gate 2: review/retain explicit user confirmation for LIVE, then consider enabling LIVE.
 
 ### Final regression
-Run the strongest appropriate final test suite, including Testnet acceptance when credentials and environment are available.
+Run the strongest appropriate final suite, including Testnet acceptance when credentials/environment are available.
 
----
+## Architect vs Executor
+**Architect (Sonnet):** broad repository analysis, architecture, risks, milestones, persistent plan.
 
-## Executor Operating Model
+**Executor (Opus):** execute the existing plan. Do not rebuild the project analysis from scratch when current state and plan exist. Opus may make a targeted deviation only when a concrete correctness, safety, lifecycle, or testability problem prevents the current stage from closing; record the reason and evidence and keep the same stage active until resolved.
 
-### Architect vs Executor
-The project uses a deliberate two-role workflow:
-
-**Architect (Sonnet):** may perform broad repository analysis, establish or revise the engineering architecture, identify risks, define milestones, and write the persistent engineering plan.
-
-**Executor (Opus):** consumes that plan and turns it into verified repository progress. Opus should NOT spend the session rebuilding the project analysis from scratch when a current plan and state already exist.
-
-Opus may challenge or adjust the plan only when implementation evidence reveals a concrete technical, safety, or correctness reason. This does NOT authorize Opus to replace the architecture/planning pass or create a new high-level plan during ordinary execution.
-
-### Fast context recovery — mandatory
+## Fast Context Recovery
 At session start:
-
 1. Read `NEXT.json`.
-2. Read only the relevant current sections of `AGENT_STATE.md` needed to identify the current task and constraints.
+2. Read only the relevant current sections of this file.
 3. Check `git status` and current `HEAD`.
-4. Inspect only the files directly required by the current task.
-5. Start productive implementation as soon as sufficient context is available.
+4. Inspect only files directly required by the current task.
+5. Start implementation as soon as sufficient context exists.
 
-**Context budget rule:** do not keep reading merely to become more comfortable with the repository. Once the current task can be implemented safely, begin implementation immediately. Read additional material only when a concrete implementation question requires it.
+Do not perform broad repository rescans or recreate the Architect's work unless a concrete implementation question requires targeted reading.
 
-Do NOT perform a broad repository rescan merely to become comfortable with the codebase.
-Do NOT consume the session on analysis, planning, or documentation when the current task is already sufficiently specified to implement.
-Do NOT recreate the Architect's work unless a concrete implementation issue makes a targeted review necessary.
+## Fixed Plan, No Unnecessary Replanning
+Use the Architect's plan as the baseline. Do not rewrite, reorder, or substantially expand it during ordinary Opus execution. Safety/correctness defects may be fixed within the current stage; do not carry a known blocking defect forward just because `NEXT.json` points to the next stage.
 
-### Fixed plan, flexible execution
-The Architect's engineering plan is the baseline plan for execution.
+## Stage Exit Gate — NO SKIPPING
+A stage is CLOSED only when:
+1. intended implementation is present;
+2. relevant verification was actually run;
+3. acceptance criteria are satisfied;
+4. no known unresolved correctness/safety/lifecycle defect remains for that stage;
+5. this file records the evidence.
 
-Do NOT replace, rewrite, or substantially expand the high-level plan during ordinary Opus execution.
-Do NOT invent a new roadmap because additional reading suggests alternative work.
-Do NOT reorder the planned stages merely for convenience.
+"Implemented" != "verified". "Tested" != automatically "safe". `NEXT.json` does not override an unresolved defect.
 
-A targeted deviation is allowed only when the current implementation exposes a concrete correctness, safety, lifecycle, or testability problem that prevents the current stage from being safely closed. In that case:
-- keep the same stage active,
-- fix the blocking issue,
-- record the reason and evidence in `AGENT_STATE.md`,
-- then continue with the existing plan.
-
-This preserves the Architect's work while preventing known defects from being carried forward.
-
-### Execution rule
-The plan can be large; execution should be incremental and checkpointed.
-
-For the current task:
-
-1. Understand the minimum context needed.
-2. Implement the task.
-3. Run focused tests while iterating only when needed.
-4. At the checkpoint, run the required verification suite once.
-5. Verify the stage acceptance criteria before advancing.
-6. If acceptance fails, keep the same stage active and fix the defect; do not advance `NEXT.json`.
-7. Update `AGENT_STATE.md` and `NEXT.json` with the real result.
-8. Commit a coherent checkpoint.
-9. Continue to the next planned stage only after the current stage is actually closed.
-
-Do not let a session reach its limit with substantial work that exists only in transient reasoning. Persist meaningful progress while working.
-
-### Stage exit gate — NO SKIPPING
-A stage is CLOSED only when all of the following are true:
-
-1. The intended implementation is present.
-2. The relevant test/check has actually been run.
-3. The stage's acceptance criteria are satisfied.
-4. No known unresolved correctness, safety, or lifecycle defect remains for that stage.
-5. `AGENT_STATE.md` records the evidence and current result.
-
-"Implemented" does not mean "verified".
-"Tested" does not automatically mean "safe".
-"NEXT.json says the next task" does not override an unresolved defect in the current stage.
-
-If a defect is found during implementation or targeted closure review, fix the defect within the current stage and re-run the relevant verification. Do not simply move the defect into a later task unless the current architecture explicitly requires that sequencing.
-
-### No unnecessary rereading
-Before advancing a stage, perform a TARGETED closure review of the changed code, relevant tests, and acceptance criteria only.
-
-Do NOT re-audit the entire repository between stages.
-Do NOT reopen unrelated files merely to re-understand the project.
-Do NOT repeat expensive full-suite runs without a concrete reason.
-
-The goal is to catch real defects without wasting the executor's context budget on broad rereading.
-
-### Test discipline
-Use focused tests while iterating when appropriate; perform the required suite once at the checkpoint.
-Never report a test result that was not actually run.
-If a test fails because of the current change, fix the issue before closing the stage.
-
-### Scope discipline
-Keep the project focused on Binance Spot OCO order management/editing.
-Preserve exact order isolation by `orderListId`.
-Do not introduce unrelated market-order trading functionality.
-Do not modify unrelated files merely to improve style.
-
-### Safety discipline
-Treat cancel/create replacement logic, asynchronous lifecycle, stale results, provider teardown, order identity, and LIVE/Testnet boundaries as safety-critical.
-Never trade safety for session completion speed.
-Never silently enable LIVE behavior.
-
----
+## No Unnecessary Rereading / Test Discipline
+Before advancing, perform only a targeted closure review of changed code, relevant tests, and acceptance criteria. Do not re-audit the entire repository between stages. Use focused tests while iterating when needed; run the required suite at the checkpoint once. Never report a test result that was not actually run, and do not repeat an expensive suite without a concrete reason such as a code change after failure.
 
 ## Continuous Checkpointing
-`AGENT_STATE.md` is a live engineering handoff, not an end-of-session diary.
+This is a live engineering handoff. Update it at meaningful milestones, after important decisions, after discovering blockers, at stable verification checkpoints, and before potentially interruptible long operations. Preserve the actual repository state, verified results, risks, decisions, and exact next continuation point.
 
-Update it at meaningful milestones, especially after:
-- completing a substantial implementation step,
-- making an important architectural decision,
-- discovering a blocker or risk,
-- reaching a stable test checkpoint,
-- or before a potentially interruptible long operation.
-
-The checkpoint must preserve the actual state of the repository, not an intended future state.
-
-At minimum keep these facts current:
-- current objective
-- current engineering plan
-- completed work
-- in-progress work
-- verified results
-- unverified results
-- risks/blockers
-- decisions
-- exact next continuation point
-
----
+## Safety / Scope
+Keep the project focused on Binance Spot OCO order management/editing. Preserve exact order isolation by `orderListId`. Do not introduce unrelated market-order trading functionality. Treat cancel/create replacement, async lifecycle, provider teardown, stale results, order identity, and LIVE/Testnet boundaries as safety-critical. Never silently enable LIVE.
 
 ## Git Hygiene
-- Do not reset, discard, or rewrite unrelated work.
-- Do not commit credentials, generated artifacts, or scratch/debug files.
-- Before commit, inspect the diff and ensure only intended files are staged.
-- Keep commits coherent and easy for the next executor to understand.
-- The repository's actual Git state takes precedence over stale prose in handoff documents.
+Do not reset/discard unrelated work. Do not commit credentials, scratch/debug artifacts, or generated files. Inspect diffs before committing. Keep checkpoints coherent. The actual Git repository state takes precedence over stale prose in this file.
