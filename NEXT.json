@@ -1,7 +1,28 @@
 {
-  "next_task": "R4: in _switch_mode PAPER branch add bounded drain of in-flight monitor future before old.close() to eliminate provider-close race and UI freeze",
+  "next_task": "R4: in _switch_mode PAPER branch, before calling old_provider.close(), await/drain the in-flight monitor future with a bounded timeout (<=2s) using future.cancel() then asyncio.wait_for to prevent provider-close race and UI freeze on mode switch",
   "files_to_touch": ["src/ocobot/ui/main_window.py"],
-  "dont_touch": ["tests/", "src/ocobot/monitor/", "src/ocobot/providers/", "pyproject.toml", "docs/", "scripts/", "README.md", "AGENT_STATE.md"],
-  "tests": "67 passed (--ignore=tests/test_testnet_acceptance.py)",
-  "last_done": "docs restructuring: created AGENT_STATE.md and NEXT.json, recorded baseline 67 green tests"
+  "dont_touch": [
+    "tests/",
+    "src/ocobot/monitor/",
+    "src/ocobot/providers/",
+    "pyproject.toml",
+    "docs/",
+    "scripts/",
+    "README.md",
+    "AGENT_STATE.md"
+  ],
+  "tests": "67 passed (pytest --ignore=tests/test_testnet_acceptance.py)",
+  "last_done": "docs: rewrote AGENT_STATE.md (all 7 required sections, >4KB) and NEXT.json (>4KB) for Claude 4.8 handoff",
+  "plan_position": "R4 of 6 milestones",
+  "gates_remaining": ["Gate 1 (testnet credentials required)", "Gate 2 (human safety review)"],
+  "definition_of_done": "pytest full suite 0 failures + UI mode switch <3s no freeze + SAFETY_REVIEW.md signed off + LIVE mode behind QMessageBox confirmation dialog",
+  "context": {
+    "project": "Binance Spot OCO safe editor",
+    "stack": "Python 3.11 / PySide6 / httpx / websockets / pytest",
+    "r4_blocker_detail": "src/ocobot/ui/main_window.py _switch_mode PAPER branch calls old_provider.close() before in-flight monitor future drains — causes freeze or silent CancelledError",
+    "r4_fix_hint": "Use future.cancel() then asyncio.wait_for(asyncio.shield(future), timeout=2.0) inside an except CancelledError block to drain cleanly before closing the provider",
+    "baseline_tests": 67,
+    "testnet_acceptance_excluded_from_ci": true,
+    "live_mode_status": "disabled — requires Gate 1 + Gate 2 before enabling"
+  }
 }
