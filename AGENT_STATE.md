@@ -1,5 +1,5 @@
 # AGENT STATE
-> Last updated by: continuity-policy pass | Repository baseline: `67ec2d7`
+> Last updated by: executor-efficiency-policy pass | Repository baseline: `a933ba9`
 
 ---
 
@@ -80,20 +80,37 @@ The project uses a deliberate two-role workflow:
 
 **Executor (Opus):** consumes that plan and turns it into verified repository progress. Opus should NOT spend the session rebuilding the project analysis from scratch when a current plan and state already exist.
 
-Opus may challenge or adjust the plan only when implementation evidence reveals a concrete technical, safety, or correctness reason. Any such change must be recorded in `AGENT_STATE.md`. This does NOT authorize Opus to replace the architecture/planning pass or create a new high-level plan during ordinary execution.
+Opus may challenge or adjust the plan only when implementation evidence reveals a concrete technical, safety, or correctness reason. This does NOT authorize Opus to replace the architecture/planning pass or create a new high-level plan during ordinary execution.
 
 ### Fast context recovery — mandatory
 At session start:
 
 1. Read `NEXT.json`.
-2. Read the relevant current sections of `AGENT_STATE.md`.
+2. Read only the relevant current sections of `AGENT_STATE.md` needed to identify the current task and constraints.
 3. Check `git status` and current `HEAD`.
 4. Inspect only the files directly required by the current task.
 5. Start productive implementation as soon as sufficient context is available.
 
+**Context budget rule:** do not keep reading merely to become more comfortable with the repository. Once the current task can be implemented safely, begin implementation immediately. Read additional material only when a concrete implementation question requires it.
+
 Do NOT perform a broad repository rescan merely to become comfortable with the codebase.
 Do NOT consume the session on analysis, planning, or documentation when the current task is already sufficiently specified to implement.
 Do NOT recreate the Architect's work unless a concrete implementation issue makes a targeted review necessary.
+
+### Fixed plan, flexible execution
+The Architect's engineering plan is the baseline plan for execution.
+
+Do NOT replace, rewrite, or substantially expand the high-level plan during ordinary Opus execution.
+Do NOT invent a new roadmap because additional reading suggests alternative work.
+Do NOT reorder the planned stages merely for convenience.
+
+A targeted deviation is allowed only when the current implementation exposes a concrete correctness, safety, lifecycle, or testability problem that prevents the current stage from being safely closed. In that case:
+- keep the same stage active,
+- fix the blocking issue,
+- record the reason and evidence in `AGENT_STATE.md`,
+- then continue with the existing plan.
+
+This preserves the Architect's work while preventing known defects from being carried forward.
 
 ### Execution rule
 The plan can be large; execution should be incremental and checkpointed.
@@ -102,12 +119,13 @@ For the current task:
 
 1. Understand the minimum context needed.
 2. Implement the task.
-3. Run the appropriate focused/full offline test command at the required checkpoint.
-4. Verify the stage acceptance criteria before advancing.
-5. If acceptance fails, keep the same stage active and fix the defect; do not advance `NEXT.json`.
-6. Update `AGENT_STATE.md` and `NEXT.json` with the real result.
-7. Commit a coherent checkpoint.
-8. Continue to the next planned task only after the current stage is actually closed.
+3. Run focused tests while iterating only when needed.
+4. At the checkpoint, run the required verification suite once.
+5. Verify the stage acceptance criteria before advancing.
+6. If acceptance fails, keep the same stage active and fix the defect; do not advance `NEXT.json`.
+7. Update `AGENT_STATE.md` and `NEXT.json` with the real result.
+8. Commit a coherent checkpoint.
+9. Continue to the next planned stage only after the current stage is actually closed.
 
 Do not let a session reach its limit with substantial work that exists only in transient reasoning. Persist meaningful progress while working.
 
