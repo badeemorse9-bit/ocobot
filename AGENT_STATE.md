@@ -48,7 +48,7 @@ The plan was established by the architecture/planning pass and is the default ex
 ### R4 — Provider-close race
 Implemented in `67ec2d7`. The code captures the in-flight `ThreadPoolExecutor` future before clearing the monitor reference, signals the monitor stop, performs a bounded drain, then closes the old provider.
 
-Required follow-up: verify the actual behavior and regression coverage before considering R4 fully closed.
+**Stage closure rule:** R4 is NOT considered complete merely because the code change exists. It must be verified against its acceptance criteria and regression coverage. If verification exposes a correctness or lifecycle defect, remain on R4, fix it, and verify again before advancing.
 
 ### R5 — Cooperative stop regression (CURRENT TASK)
 - Add the targeted regression test described by `NEXT.json`.
@@ -80,7 +80,7 @@ The project uses a deliberate two-role workflow:
 
 **Executor (Opus):** consumes that plan and turns it into verified repository progress. Opus should NOT spend the session rebuilding the project analysis from scratch when a current plan and state already exist.
 
-Opus may challenge or adjust the plan only when implementation evidence reveals a concrete technical, safety, or correctness reason. Any such change must be recorded in `AGENT_STATE.md`.
+Opus may challenge or adjust the plan only when implementation evidence reveals a concrete technical, safety, or correctness reason. Any such change must be recorded in `AGENT_STATE.md`. This does NOT authorize Opus to replace the architecture/planning pass or create a new high-level plan during ordinary execution.
 
 ### Fast context recovery — mandatory
 At session start:
@@ -93,6 +93,7 @@ At session start:
 
 Do NOT perform a broad repository rescan merely to become comfortable with the codebase.
 Do NOT consume the session on analysis, planning, or documentation when the current task is already sufficiently specified to implement.
+Do NOT recreate the Architect's work unless a concrete implementation issue makes a targeted review necessary.
 
 ### Execution rule
 The plan can be large; execution should be incremental and checkpointed.
@@ -102,16 +103,42 @@ For the current task:
 1. Understand the minimum context needed.
 2. Implement the task.
 3. Run the appropriate focused/full offline test command at the required checkpoint.
-4. Update `AGENT_STATE.md` and `NEXT.json` with the real result.
-5. Commit a coherent checkpoint.
-6. Stop only when the current checkpoint is safely persisted, or continue within the same session when the task is explicitly large enough to justify it.
+4. Verify the stage acceptance criteria before advancing.
+5. If acceptance fails, keep the same stage active and fix the defect; do not advance `NEXT.json`.
+6. Update `AGENT_STATE.md` and `NEXT.json` with the real result.
+7. Commit a coherent checkpoint.
+8. Continue to the next planned task only after the current stage is actually closed.
 
 Do not let a session reach its limit with substantial work that exists only in transient reasoning. Persist meaningful progress while working.
 
+### Stage exit gate — NO SKIPPING
+A stage is CLOSED only when all of the following are true:
+
+1. The intended implementation is present.
+2. The relevant test/check has actually been run.
+3. The stage's acceptance criteria are satisfied.
+4. No known unresolved correctness, safety, or lifecycle defect remains for that stage.
+5. `AGENT_STATE.md` records the evidence and current result.
+
+"Implemented" does not mean "verified".
+"Tested" does not automatically mean "safe".
+"NEXT.json says the next task" does not override an unresolved defect in the current stage.
+
+If a defect is found during implementation or targeted closure review, fix the defect within the current stage and re-run the relevant verification. Do not simply move the defect into a later task unless the current architecture explicitly requires that sequencing.
+
+### No unnecessary rereading
+Before advancing a stage, perform a TARGETED closure review of the changed code, relevant tests, and acceptance criteria only.
+
+Do NOT re-audit the entire repository between stages.
+Do NOT reopen unrelated files merely to re-understand the project.
+Do NOT repeat expensive full-suite runs without a concrete reason.
+
+The goal is to catch real defects without wasting the executor's context budget on broad rereading.
+
 ### Test discipline
-Do not rerun the same expensive full suite repeatedly without a reason.
 Use focused tests while iterating when appropriate; perform the required suite once at the checkpoint.
 Never report a test result that was not actually run.
+If a test fails because of the current change, fix the issue before closing the stage.
 
 ### Scope discipline
 Keep the project focused on Binance Spot OCO order management/editing.
