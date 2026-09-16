@@ -13,8 +13,8 @@
     "README.md",
     "AGENT_STATE.md"
   ],
-  "tests": "62 passed (pytest --ignore=tests/test_testnet_acceptance.py)",
-  "last_done": "R4: drained in-flight monitor future before provider close in _switch_mode PAPER branch to remove the provider-close race / UI freeze",
+  "tests": "66 passed (pytest --ignore=tests/test_testnet_acceptance.py -p no:cacheprovider)",
+  "last_done": "R4: fixed provider-close race by deferring old provider teardown until the in-flight monitor future actually completes; added and passed 4 direct regression tests",
   "plan_position": "R5 of 6 milestones",
   "gates_remaining": [
     "Gate 1 (testnet credentials required)",
@@ -24,11 +24,11 @@
   "context": {
     "project": "Binance Spot OCO safe editor",
     "stack": "Python 3.11 / PySide6 / httpx / websockets / pytest",
-    "r4_done_detail": "src/ocobot/ui/main_window.py _switch_mode PAPER branch now captures self._monitor_future BEFORE _stop_dynamic_monitor() clears it, calls _stop_dynamic_monitor() to signal the R1 stop token, then drains via _drain_monitor_future() (future.cancel() + future.result(timeout=2.0), bounded <=2s) BEFORE old_provider.close()",
-    "r4_impl_note": "_monitor_future is a concurrent.futures ThreadPoolExecutor future (no running event loop), so the cooperative drain uses future.cancel()+future.result(timeout=2.0) instead of asyncio.wait_for/shield; this is the equivalent cooperative drain the guide allows",
-    "r5_hint": "Add a parameterised test that submits/starts a monitor future, signals the stop token, and asserts the future resolves within 2s; total test count must increase by >=1 (from 62)",
-    "baseline_tests": 62,
-    "baseline_note": "actual green count is 62 (0 failures, 0 errors); prior docs recorded 67 which was a stale docs-rewrite figure, corrected here",
+    "r4_done_detail": "src/ocobot/ui/main_window.py _switch_mode captures self._monitor_future before _stop_dynamic_monitor clears it, stops monitoring, creates the new paper provider so the UI can proceed, and routes old-provider teardown through _drain_monitor_future. If the future is already finished/cancelled/errored, teardown occurs immediately; if it is still running after the bounded timeout, teardown is deferred with a done callback until the future completes.",
+    "r4_impl_note": "_monitor_future is a concurrent.futures ThreadPoolExecutor future, not an asyncio future. The implementation therefore uses future.cancel()+future.result(timeout=2.0), and on TimeoutError registers a completion callback instead of closing the provider while the worker is active.",
+    "r4_verification": "4 passed in 1.14s for tests/test_switch_mode_provider_close.py; 66 passed in 7.30s for the full offline suite; 0 failures and 0 errors.",
+    "r5_hint": "Add or complete the planned cooperative-stop regression test and verify the relevant main_window behavior; do not redesign the overall plan.",
+    "baseline_tests": 66,
     "testnet_acceptance_excluded_from_ci": true,
     "live_mode_status": "disabled - requires Gate 1 + Gate 2 before enabling"
   }
