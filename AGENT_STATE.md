@@ -1,5 +1,5 @@
 # AGENT STATE
-> Last updated by: docs-rewrite pass | Baseline: 67 tests green
+> Last updated by: continuity-policy pass | Repository baseline: `67ec2d7`
 
 ---
 
@@ -21,86 +21,139 @@ Build a Binance Spot OCO safe editor that lets a user monitor, edit, and atomica
 ---
 
 ## What's Working
-- **67 tests pass** (`pytest --ignore=tests/test_testnet_acceptance.py`) — zero failures, zero errors.
-- R1 stop token: monitor thread honours a `threading.Event` stop token; stops within 2 s when signalled.
-- R2 rollover rehydration: on symbol switch the state machine re-hydrates open OCO orders from the REST snapshot before subscribing to the stream.
-- R3 symbol guard: both UI layer and provider layer reject operations on a symbol that is not the currently loaded one.
-- Dynamic Monitor UI renders live order-book and OCO status using the paper provider.
-- Testnet adapter wired in; credentials are read from `.env` / environment variables (never hardcoded).
-- Paper provider fully functional for offline / CI development.
-- Rollover state rehydration confirmed working in unit tests.
+- R1 stop token exists and is intended to make monitor shutdown cooperative.
+- R2 rollover rehydration exists and is covered by unit tests from the prior implementation work.
+- R3 symbol guard exists at both the coordinator and UI layers.
+- R4 provider-close drain was implemented in commit `67ec2d7` in `src/ocobot/ui/main_window.py`.
+- Dynamic Monitor UI and Paper provider are in place.
+- Testnet adapter is wired in; credentials are read from environment variables / `.env` and are not hardcoded.
+- LIVE mode remains gated.
+
+### Test-count note
+`NEXT.json` records **62 passed** as the current verified offline baseline immediately after the R4 handoff. Earlier documentation reported 67, creating a conflicting/stale count. Do not treat either number as newly verified until the appropriate test run is performed. The next executor must record the actual result.
 
 ---
 
-## What's Broken
-- **R4 — provider-close race** (BLOCKER): In `src/ocobot/ui/main_window.py`, inside `_switch_mode`, the PAPER branch calls `old_provider.close()` before the in-flight monitor future has finished draining. This can cause a UI freeze, a silent `asyncio.CancelledError`, or a race-condition log flood when the user switches modes quickly.
-- **Gate 1 — testnet acceptance** (BLOCKED on credentials): `tests/test_testnet_acceptance.py` requires real Binance Testnet API key + secret in env. Not run in CI. Must be run manually with valid credentials.
-- **Gate 2 — human safety review** (NOT DONE): LIVE mode order submission has not been reviewed by a human for correctness and safety. LIVE mode is currently disabled in the UI. Must stay disabled until Gate 2 is signed off.
+## Current Risks / Unverified Gates
+- **R4 verification:** the provider-close drain implementation exists, but the repository has not yet established a fresh test result proving its intended timing/lifecycle behavior after commit `67ec2d7`.
+- **Gate 1 — Testnet acceptance:** blocked on real Binance Testnet credentials. `tests/test_testnet_acceptance.py` is not a CI gate and must be run manually with valid credentials.
+- **Gate 2 — human safety review:** not done. LIVE mode must remain disabled until the human review is completed.
+- Do not enable LIVE merely because offline tests are green.
 
 ---
 
-## Full Plan
-All tasks are ordered. Do NOT skip ahead. Do NOT re-order.
+## Full Engineering Plan
+The plan was established by the architecture/planning pass and is the default execution direction for Opus.
 
-### R4 — Fix provider-close race (CURRENT TASK)
-- **File:** `src/ocobot/ui/main_window.py`
-- **Method:** `_switch_mode` — PAPER branch only.
-- **What to do:** Before calling `old_provider.close()`, await/drain the in-flight monitor future with a bounded timeout (≤ 2 s). Use `future.cancel()` then `asyncio.wait_for(shield(future), timeout=2)` or equivalent cooperative drain so the monitor thread can flush its stop sequence cleanly.
-- **Acceptance:** Mode switch completes in < 3 s with no exception in logs and no UI freeze. Existing 67 tests still pass.
+### R4 — Provider-close race
+Implemented in `67ec2d7`. The code captures the in-flight `ThreadPoolExecutor` future before clearing the monitor reference, signals the monitor stop, performs a bounded drain, then closes the old provider.
 
-### R5 — Cooperative stop regression
-- **File:** `tests/test_stop_token.py` (add new test) and `src/ocobot/ui/main_window.py` (verify behaviour).
-- **What to do:** Add a parameterised pytest test that starts a monitor future, signals the stop token, and asserts the future resolves within 2 s. This is a regression guard for R4.
-- **Acceptance:** New test passes. Total test count increases by at least 1.
+Required follow-up: verify the actual behavior and regression coverage before considering R4 fully closed.
+
+### R5 — Cooperative stop regression (CURRENT TASK)
+- Add the targeted regression test described by `NEXT.json`.
+- Verify the current `main_window.py` behavior relevant to the monitor future.
+- Acceptance: the new regression test passes and the full offline suite remains green.
 
 ### Gate 1 — Testnet acceptance
-- **Files:** `tests/test_testnet_acceptance.py` (read-only, do not modify).
-- **What to do:** Run with real Binance Testnet credentials. All tests must pass.
-- **Acceptance:** `pytest tests/test_testnet_acceptance.py` exits 0 with 0 failures.
+- Run `tests/test_testnet_acceptance.py` with real Binance Testnet credentials.
+- Do not modify the acceptance test merely to make it pass.
 
 ### Gate 2 — Human safety review
-- **What to do:** A human reviewer must read the LIVE order submission code path and sign off that no accidental live order can be placed without explicit user confirmation.
-- **Acceptance:** Reviewer adds a signed comment in `docs/SAFETY_REVIEW.md`.
+- Human review of the LIVE order submission path.
+- LIVE remains disabled until this review is explicitly completed.
 
-### Final — Enable LIVE mode
-- **File:** `src/ocobot/ui/main_window.py`
-- **What to do:** Remove the LIVE mode disabled guard. Add a confirmation dialog (QMessageBox) before any live order submission. Confirm Gate 1 and Gate 2 are complete first.
-- **Acceptance:** User can place a live order only after explicitly confirming in the dialog. No test regressions.
+### Final — LIVE enablement
+Only after Gate 1 and Gate 2 are complete: review the live path, add/retain explicit confirmation, and then consider enabling LIVE.
 
-### Final Regression
-- Run full pytest suite **including** testnet acceptance tests.
-- **Acceptance:** 0 failures, 0 errors across all test files.
+### Final regression
+Run the strongest appropriate final test suite, including Testnet acceptance when credentials and environment are available.
 
 ---
 
-## Definition of Success (measurable exit criteria)
-The project is DONE when ALL of the following are simultaneously true — no exceptions:
+## Executor Operating Model
 
-1. `pytest` (full suite, including `tests/test_testnet_acceptance.py`) exits with **0 failures and 0 errors**.
-2. UI mode switch (PAPER ↔ TESTNET) completes in **< 3 seconds** with no exception in logs (verified manually).
-3. No UI freeze observed during 10 consecutive rapid mode switches (manual smoke test).
-4. `docs/SAFETY_REVIEW.md` exists and contains a human sign-off for LIVE order flow.
-5. LIVE mode is accessible in the UI **only** behind a QMessageBox confirmation dialog.
-6. `NEXT.json` → `next_task` is `"DONE — all gates passed"`.
+### Architect vs Executor
+The project uses a deliberate two-role workflow:
+
+**Architect (Sonnet):** may perform broad repository analysis, establish or revise the engineering architecture, identify risks, define milestones, and write the persistent engineering plan.
+
+**Executor (Opus):** consumes that plan and turns it into verified repository progress. Opus should NOT spend the session rebuilding the project analysis from scratch when a current plan and state already exist.
+
+Opus may challenge or adjust the plan only when implementation evidence reveals a concrete technical, safety, or correctness reason. Any such change must be recorded in `AGENT_STATE.md`.
+
+### Fast context recovery — mandatory
+At session start:
+
+1. Read `NEXT.json`.
+2. Read the relevant current sections of `AGENT_STATE.md`.
+3. Check `git status` and current `HEAD`.
+4. Inspect only the files directly required by the current task.
+5. Start productive implementation as soon as sufficient context is available.
+
+Do NOT perform a broad repository rescan merely to become comfortable with the codebase.
+Do NOT consume the session on analysis, planning, or documentation when the current task is already sufficiently specified to implement.
+
+### Execution rule
+The plan can be large; execution should be incremental and checkpointed.
+
+For the current task:
+
+1. Understand the minimum context needed.
+2. Implement the task.
+3. Run the appropriate focused/full offline test command at the required checkpoint.
+4. Update `AGENT_STATE.md` and `NEXT.json` with the real result.
+5. Commit a coherent checkpoint.
+6. Stop only when the current checkpoint is safely persisted, or continue within the same session when the task is explicitly large enough to justify it.
+
+Do not let a session reach its limit with substantial work that exists only in transient reasoning. Persist meaningful progress while working.
+
+### Test discipline
+Do not rerun the same expensive full suite repeatedly without a reason.
+Use focused tests while iterating when appropriate; perform the required suite once at the checkpoint.
+Never report a test result that was not actually run.
+
+### Scope discipline
+Keep the project focused on Binance Spot OCO order management/editing.
+Preserve exact order isolation by `orderListId`.
+Do not introduce unrelated market-order trading functionality.
+Do not modify unrelated files merely to improve style.
+
+### Safety discipline
+Treat cancel/create replacement logic, asynchronous lifecycle, stale results, provider teardown, order identity, and LIVE/Testnet boundaries as safety-critical.
+Never trade safety for session completion speed.
+Never silently enable LIVE behavior.
 
 ---
 
-## Execution Guide for Claude 4.8
-You are the EXECUTOR. The plan above is final. Follow these steps exactly, one task at a time. No replanning. No full-project rescans.
+## Continuous Checkpointing
+`AGENT_STATE.md` is a live engineering handoff, not an end-of-session diary.
 
-### Step-by-step rules
-1. **Read `NEXT.json` first** — that file tells you the one task to do right now (`next_task`) and the one or two files you are allowed to touch (`files_to_touch`).
-2. **Read only the files listed in `files_to_touch`** — do not open any other source files unless they are explicitly listed.
-3. **Execute the task described in `next_task`** — implement the change, nothing more.
-4. **Run `pytest --ignore=tests/test_testnet_acceptance.py`** — confirm the green count is ≥ the count in `NEXT.json → tests`. If any test regresses, fix it before continuing.
-5. **Update `NEXT.json`** — set `last_done` to what you just did, set `next_task` to the next item in the Full Plan above, update `tests` to the current green count, update `files_to_touch` to the files for the next task.
-6. **`git add` only the files you touched plus `NEXT.json`** — never stage unrelated files.
-7. **`git commit -m "feat: <one-line summary of what you did>"`** — commit message must be lowercase, imperative, ≤ 72 chars.
-8. **Stop** — do not proceed to the next task in the same session. The next agent invocation will read `NEXT.json` and continue.
+Update it at meaningful milestones, especially after:
+- completing a substantial implementation step,
+- making an important architectural decision,
+- discovering a blocker or risk,
+- reaching a stable test checkpoint,
+- or before a potentially interruptible long operation.
 
-### Hard constraints
-- FORBIDDEN: touching `tests/`, `src/ocobot/monitor/`, `src/ocobot/providers/`, `pyproject.toml`, `docs/`, `scripts/`, `README.md` unless they are explicitly listed in `files_to_touch` for the current task.
-- FORBIDDEN: rebuilding the plan or rescanning the whole project.
-- FORBIDDEN: running pytest more than once per session.
-- FORBIDDEN: looping — if pytest fails after your fix, report the failure and stop; do not retry silently.
-- FORBIDDEN: `Start-Sleep`, polling temp files, or any background process tricks.
+The checkpoint must preserve the actual state of the repository, not an intended future state.
+
+At minimum keep these facts current:
+- current objective
+- current engineering plan
+- completed work
+- in-progress work
+- verified results
+- unverified results
+- risks/blockers
+- decisions
+- exact next continuation point
+
+---
+
+## Git Hygiene
+- Do not reset, discard, or rewrite unrelated work.
+- Do not commit credentials, generated artifacts, or scratch/debug files.
+- Before commit, inspect the diff and ensure only intended files are staged.
+- Keep commits coherent and easy for the next executor to understand.
+- The repository's actual Git state takes precedence over stale prose in handoff documents.
