@@ -446,24 +446,31 @@ class MainWindow(QMainWindow):
     def _switch_mode(self, mode: str) -> None:
         if mode == "PAPER":
             # R4: capture the in-flight monitor future BEFORE _stop_dynamic_monitor
-            # clears the reference, so it can be drained cooperatively below.
+            # clears the reference, so it can be drained/torn down cooperatively.
             pending_monitor = self._monitor_future
             self._stop_dynamic_monitor()
             self._stop_price_subscription()
-            # R4: drain the in-flight monitor future (bounded <=2s) BEFORE closing
-            # the old provider, so the monitor thread flushes its stop sequence
-            # instead of racing provider.close() (UI freeze / silent CancelledError).
-            self._drain_monitor_future(pending_monitor)
+            # Install the new paper provider immediately so the UI stays responsive;
+            # the OLD provider is torn down only once nothing is still using it.
             old = self.provider
             self.provider = self._new_paper_provider()
             self.service = OCOEditorService(self.provider)
             self.mode = "PAPER"
             self._clear_selection_ui()
             self._set_mode_visuals()
-            try:
-                getattr(old, "close", lambda: None)()
-            except Exception:
-                pass
+
+            def _close_old() -> None:
+                try:
+                    getattr(old, "close", lambda: None)()
+                except Exception:
+                    pass
+
+            # R4: GUARANTEE old.close() can never race a running monitor future.
+            # _stop_dynamic_monitor() already signalled the cooperative stop token;
+            # _drain_monitor_future waits a bounded <=2s and closes, but if the
+            # worker is STILL running past that bound it DEFERS the close to the
+            # future's completion so teardown never overlaps the in-flight task.
+            self._drain_monitor_future(pending_monitor, _close_old)
             self._refresh_orders(False)
             self.statusBar().showMessage("وضع الورق جاهز")
             return
@@ -871,22 +878,42 @@ class MainWindow(QMainWindow):
             self.dynamic_monitor_panel.set_enabled(enabled)
             self.dynamic_monitor_panel.set_monitoring_state(False, "Ready" if enabled else "Select an OCO first")
 
-    def _drain_monitor_future(self, future: Any) -> None:
-        """R4: cooperatively drain an in-flight monitor future before the provider
-        is torn down. cancel() first (a no-op if the task is already running), then
-        wait a bounded <=2s for the monitor thread to flush its stop sequence, so
-        provider.close() never races the running task. This is the equivalent
-        cooperative drain to asyncio cancel/shield/wait_for, adapted for the
-        ThreadPoolExecutor (concurrent.futures) future this UI actually uses."""
-        if future is None:
+    @staticmethod
+    def _drain_monitor_future(
+        future: Any,
+        on_drained: Callable[[], None],
+        timeout: float = 2.0,
+    ) -> None:
+        """R4: run ``on_drained`` (the old-provider teardown) ONLY when no monitor
+        future is still running against that provider, so provider.close() can
+        never race the in-flight task.
+
+        The cooperative stop token has already been signalled by
+        _stop_dynamic_monitor(). Here we cancel() (a no-op once the task is
+        running) and wait a bounded ``timeout`` (<=2s) for the worker to finish:
+          * finished / cancelled / errored -> tear down now;
+          * STILL running after the bound   -> DEFER teardown to the future's
+            completion callback, so close() runs strictly after the task ends.
+
+        Uses concurrent.futures (not asyncio.wait_for/shield) because the monitor
+        runs on a ThreadPoolExecutor with no running event loop; this is the
+        equivalent cooperative drain the guide allows."""
+        if future is None or future.done():
+            on_drained()
             return
         future.cancel()
         try:
-            future.result(timeout=2.0)
-        except (CancelledError, TimeoutError):
+            future.result(timeout=timeout)
+        except CancelledError:
             pass
+        except TimeoutError:
+            # Worker still running: never close synchronously. Defer teardown to
+            # the future's completion so provider.close() cannot overlap the task.
+            future.add_done_callback(lambda _f: on_drained())
+            return
         except Exception:
             pass
+        on_drained()
 
     def _trail_event(self, kind: str, details: str) -> None:
         stamp = time.strftime("%H:%M:%S")
