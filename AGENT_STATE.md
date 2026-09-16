@@ -1,5 +1,5 @@
 # AGENT STATE
-> Last updated by: R5 closure checkpoint | Repository baseline: `80dcdb7` (+ working-tree add: tests/test_stop_token.py, uncommitted)
+> Last updated by: Gate 1 PASS checkpoint | Repository baseline: `b2f7464` (R5 test committed; Gate 1 executed against this tree; working tree clean)
 
 ## Project Goal
 Binance Spot OCO safe editor: monitor, edit, and atomically replace ONE selected OCO order by `orderListId`, with safe async lifecycle and no UI freeze on provider teardown.
@@ -21,6 +21,7 @@ Python 3.11, PySide6/Qt6, httpx, websockets, pytest. Exchange integration: Binan
 - R5 cooperative stop-token regression added in `tests/test_stop_token.py`: 4 tests (2 parametrized cases x 2). Verifies a signalled cooperative stop token resolves the in-flight monitor future within the 2.0s R4 drain bound with no cancel/create mutation, and that `MainWindow._drain_monitor_future` then tears down the old provider immediately.
 - No change was required to `src/ocobot/ui/main_window.py`: the captured-future + cooperative-stop + bounded-drain path was already correct; R5 verified it and now regression-guards it.
 - Full offline suite now **70 passed** (baseline 66 + 4 new), 0 failures, 0 errors.
+- Gate 1 (Binance Spot Testnet acceptance) PASSED: `tests/test_testnet_acceptance.py` -> **1 passed in 26.14s** (`python -m pytest tests/test_testnet_acceptance.py -vv -rs`), executed against Binance Spot Testnet. Credentials were supplied locally via environment variables and were never committed, copied, logged, or exposed.
 
 ## R4 — CLOSED WITH VERIFICATION
 R4 is closed because implementation, targeted regression coverage, and the offline suite all passed at the checkpoint above.
@@ -38,18 +39,29 @@ R5 is closed: parameterised regression coverage was added and the offline suite 
   - Targeted: `pytest tests/test_stop_token.py -p no:cacheprovider -v` -> **4 passed** (~3.2s).
   - Full offline suite: `pytest --ignore=tests/test_testnet_acceptance.py -p no:cacheprovider` -> **70 passed** (~44s), 0 failures / 0 errors.
 - No unresolved R5 correctness/safety/lifecycle defect. The previously noted "deferred `on_drained` callback may run on the future's worker thread" item remains a future UI-review consideration only (R4-closed), not an R5 blocker. LIVE remains gated.
-- The new test is in the working tree (uncommitted); this checkpoint does not commit it.
+- The R5 test `tests/test_stop_token.py` is committed (part of HEAD `b2f7464` prior to this Gate 1 checkpoint); working tree is otherwise clean.
+
+## GATE 1 — PASSED (Testnet acceptance)
+Gate 1 is CLOSED with a real Testnet run.
+
+- Test: `tests/test_testnet_acceptance.py` (unmodified).
+- Command: `python -m pytest tests/test_testnet_acceptance.py -vv -rs`.
+- Result: **1 passed in 26.14s**.
+- Environment: executed against **Binance Spot Testnet** with credentials supplied locally through environment variables; credentials were **not** committed, copied, logged, or exposed.
+- Do not rerun unless a real code change makes a rerun necessary. Do not modify the acceptance test.
+- Next stage: **Gate 2 — human safety review** (sign off `SAFETY_REVIEW.md`). LIVE remains disabled until Gate 2 is complete.
 
 ## Engineering Plan
 The high-level plan was established by the previous Architect (Sonnet) and is the baseline for Opus execution. Do not replace or reorder it during ordinary execution.
 
-### R5 — DONE (Cooperative stop regression) — current pointer: Gate 1 (BLOCKED: awaiting Binance Testnet credentials)
+### R5 — DONE (Cooperative stop regression) — current pointer: Gate 2 (human safety review)
 - Use the existing R5 scope from `NEXT.json`.
 - Add/complete the targeted stop-token regression coverage and verify the relevant `main_window.py` behavior.
 - Acceptance: regression coverage passes and the offline suite remains green.
 
-### Gate 1 — Testnet acceptance
+### Gate 1 — Testnet acceptance — PASS
 Run `tests/test_testnet_acceptance.py` with real Binance Testnet credentials. Do not modify the acceptance test just to make it pass.
+**PASS:** executed against Binance Spot Testnet -> 1 passed in 26.14s; credentials supplied locally, not committed/exposed. See "GATE 1 — PASSED (Testnet acceptance)" above.
 
 ### Gate 2 — Human safety review
 Human review of the LIVE order-submission path. LIVE stays disabled until explicitly approved.
