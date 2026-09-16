@@ -1,8 +1,10 @@
 {
-  "next_task": "R4: in _switch_mode PAPER branch, before calling old_provider.close(), await/drain the in-flight monitor future with a bounded timeout (<=2s) using future.cancel() then asyncio.wait_for to prevent provider-close race and UI freeze on mode switch",
-  "files_to_touch": ["src/ocobot/ui/main_window.py"],
+  "next_task": "R5: add a parameterised pytest regression test in tests/test_stop_token.py that starts a monitor future, signals the stop token, and asserts the future resolves within 2s (regression guard for the R4 provider-close drain); verify behaviour in src/ocobot/ui/main_window.py",
+  "files_to_touch": [
+    "tests/test_stop_token.py",
+    "src/ocobot/ui/main_window.py"
+  ],
   "dont_touch": [
-    "tests/",
     "src/ocobot/monitor/",
     "src/ocobot/providers/",
     "pyproject.toml",
@@ -11,18 +13,23 @@
     "README.md",
     "AGENT_STATE.md"
   ],
-  "tests": "67 passed (pytest --ignore=tests/test_testnet_acceptance.py)",
-  "last_done": "docs: rewrote AGENT_STATE.md (all 7 required sections, >4KB) and NEXT.json (>4KB) for Claude 4.8 handoff",
-  "plan_position": "R4 of 6 milestones",
-  "gates_remaining": ["Gate 1 (testnet credentials required)", "Gate 2 (human safety review)"],
+  "tests": "62 passed (pytest --ignore=tests/test_testnet_acceptance.py)",
+  "last_done": "R4: drained in-flight monitor future before provider close in _switch_mode PAPER branch to remove the provider-close race / UI freeze",
+  "plan_position": "R5 of 6 milestones",
+  "gates_remaining": [
+    "Gate 1 (testnet credentials required)",
+    "Gate 2 (human safety review)"
+  ],
   "definition_of_done": "pytest full suite 0 failures + UI mode switch <3s no freeze + SAFETY_REVIEW.md signed off + LIVE mode behind QMessageBox confirmation dialog",
   "context": {
     "project": "Binance Spot OCO safe editor",
     "stack": "Python 3.11 / PySide6 / httpx / websockets / pytest",
-    "r4_blocker_detail": "src/ocobot/ui/main_window.py _switch_mode PAPER branch calls old_provider.close() before in-flight monitor future drains — causes freeze or silent CancelledError",
-    "r4_fix_hint": "Use future.cancel() then asyncio.wait_for(asyncio.shield(future), timeout=2.0) inside an except CancelledError block to drain cleanly before closing the provider",
-    "baseline_tests": 67,
+    "r4_done_detail": "src/ocobot/ui/main_window.py _switch_mode PAPER branch now captures self._monitor_future BEFORE _stop_dynamic_monitor() clears it, calls _stop_dynamic_monitor() to signal the R1 stop token, then drains via _drain_monitor_future() (future.cancel() + future.result(timeout=2.0), bounded <=2s) BEFORE old_provider.close()",
+    "r4_impl_note": "_monitor_future is a concurrent.futures ThreadPoolExecutor future (no running event loop), so the cooperative drain uses future.cancel()+future.result(timeout=2.0) instead of asyncio.wait_for/shield; this is the equivalent cooperative drain the guide allows",
+    "r5_hint": "Add a parameterised test that submits/starts a monitor future, signals the stop token, and asserts the future resolves within 2s; total test count must increase by >=1 (from 62)",
+    "baseline_tests": 62,
+    "baseline_note": "actual green count is 62 (0 failures, 0 errors); prior docs recorded 67 which was a stale docs-rewrite figure, corrected here",
     "testnet_acceptance_excluded_from_ci": true,
-    "live_mode_status": "disabled — requires Gate 1 + Gate 2 before enabling"
+    "live_mode_status": "disabled - requires Gate 1 + Gate 2 before enabling"
   }
 }

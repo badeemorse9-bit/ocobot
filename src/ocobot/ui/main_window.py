@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
@@ -445,8 +445,15 @@ class MainWindow(QMainWindow):
 
     def _switch_mode(self, mode: str) -> None:
         if mode == "PAPER":
+            # R4: capture the in-flight monitor future BEFORE _stop_dynamic_monitor
+            # clears the reference, so it can be drained cooperatively below.
+            pending_monitor = self._monitor_future
             self._stop_dynamic_monitor()
             self._stop_price_subscription()
+            # R4: drain the in-flight monitor future (bounded <=2s) BEFORE closing
+            # the old provider, so the monitor thread flushes its stop sequence
+            # instead of racing provider.close() (UI freeze / silent CancelledError).
+            self._drain_monitor_future(pending_monitor)
             old = self.provider
             self.provider = self._new_paper_provider()
             self.service = OCOEditorService(self.provider)
@@ -863,6 +870,23 @@ class MainWindow(QMainWindow):
             enabled = bool(self.service.selection and self._selected_id)
             self.dynamic_monitor_panel.set_enabled(enabled)
             self.dynamic_monitor_panel.set_monitoring_state(False, "Ready" if enabled else "Select an OCO first")
+
+    def _drain_monitor_future(self, future: Any) -> None:
+        """R4: cooperatively drain an in-flight monitor future before the provider
+        is torn down. cancel() first (a no-op if the task is already running), then
+        wait a bounded <=2s for the monitor thread to flush its stop sequence, so
+        provider.close() never races the running task. This is the equivalent
+        cooperative drain to asyncio cancel/shield/wait_for, adapted for the
+        ThreadPoolExecutor (concurrent.futures) future this UI actually uses."""
+        if future is None:
+            return
+        future.cancel()
+        try:
+            future.result(timeout=2.0)
+        except (CancelledError, TimeoutError):
+            pass
+        except Exception:
+            pass
 
     def _trail_event(self, kind: str, details: str) -> None:
         stamp = time.strftime("%H:%M:%S")
